@@ -8,9 +8,9 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
-@RequestMapping("/api/auth")
+@RequestMapping("/ace/auth")
 @RequiredArgsConstructor
-public class GithubAuthController {
+public class GitHubController {
 
     private final GitHubAuthService authService;
 

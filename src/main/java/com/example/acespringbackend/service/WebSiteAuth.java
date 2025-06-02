@@ -4,7 +4,7 @@ import com.example.acespringbackend.auth.dto.LoginRequest;
 import com.example.acespringbackend.auth.dto.LoginResponse;
 import com.example.acespringbackend.auth.dto.SignUpRequest;
 import com.example.acespringbackend.auth.dto.SignUpResponse;
-import com.example.applicantace.model.User;
+import com.example.acespringbackend.model.User;
 import com.example.acespringbackend.repository.UserRepository;
 import com.example.acespringbackend.utility.JwtUtility;
 import org.springframework.security.crypto.password.PasswordEncoder;

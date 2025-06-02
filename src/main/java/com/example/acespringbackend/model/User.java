@@ -1,9 +1,8 @@
-// com.example.backend.auth.model.User.java
-package com.example.applicantace.model;
+package com.example.acespringbackend.model;
 
+import lombok.*;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
-import lombok.*;
 
 @Getter
 @Setter
@@ -17,20 +16,33 @@ public class User {
 
     private String username;
     private String email;
-    private String password;
+    private String imageUrl;
+
+    private String accessToken;
+    private String firebaseIdToken;
 
     private AuthProvider authProvider;
+
+    public User(String username, String email, String encodedPassword, AuthProvider authProvider) {
+    }
+
+    public String getPassword() {
+        return email;
+    }
 
     public enum AuthProvider {
         GOOGLE,
         GITHUB,
-        FIREBASE, WEBSITE
+        FIREBASE,
+        WEBSITE
     }
 
-    public User(String username, String email, String password, AuthProvider authProvider) {
+    public User(String username, String email, String imageUrl, String accessToken, String firebaseIdToken, AuthProvider authProvider) {
         this.username = username;
         this.email = email;
-        this.password = password;
+        this.imageUrl = imageUrl;
+        this.accessToken = accessToken;
+        this.firebaseIdToken = firebaseIdToken;
         this.authProvider = authProvider;
     }
 }

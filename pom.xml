@@ -100,6 +100,11 @@
             <artifactId>jjwt-jackson</artifactId>
             <version>0.12.6</version>
         </dependency>
+        <dependency>
+            <groupId>com.google.cloud</groupId>
+            <artifactId>google-cloud-service-management-bom</artifactId>
+            <version>3.49.0</version>
+        </dependency>
     </dependencies>
 
     <build>

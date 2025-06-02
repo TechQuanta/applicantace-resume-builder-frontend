@@ -1,6 +1,6 @@
 package com.example.acespringbackend.repository;
 
-import com.example.applicantace.model.User;
+import com.example.acespringbackend.model.User;
 import org.springframework.data.mongodb.repository.ReactiveMongoRepository;
 import reactor.core.publisher.Mono;
 
