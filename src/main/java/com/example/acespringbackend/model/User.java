@@ -4,6 +4,8 @@ import lombok.*;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
 
+import java.time.LocalDateTime;
+
 @Getter
 @Setter
 @NoArgsConstructor
@@ -12,37 +14,40 @@ import org.springframework.data.mongodb.core.mapping.Document;
 public class User {
 
     @Id
-    private String id;
+    private String id; // Firebase UID or UUID for website users
 
     private String username;
     private String email;
+    private String password; // for website auth users only
+    private Boolean emailVerified;
     private String imageUrl;
 
     private String accessToken;
     private String firebaseIdToken;
 
     private AuthProvider authProvider;
+    private String signInProvider; // e.g. "google.com", "github.com", "email/password"
+    private LocalDateTime createdAt;
+    private LocalDateTime lastLogin;
 
-    public User(String username, String email, String encodedPassword, AuthProvider authProvider) {
-    }
+    private String driveFolderId; // Add this to track user's Google Drive folder
 
-    public String getPassword() {
-        return email;
-    }
+    // GitHub-specific fields
+    private String githubId;
+    private String githubLogin;
+    private String githubHtmlUrl;
+    private String githubProfileUrl;
+    private String githubCompany;
+    private String githubLocation;
+    private String githubBio;
+    private Integer githubPublicRepos;
+    private Integer githubFollowers;
+    private Integer githubFollowing;
 
     public enum AuthProvider {
         GOOGLE,
         GITHUB,
         FIREBASE,
         WEBSITE
-    }
-
-    public User(String username, String email, String imageUrl, String accessToken, String firebaseIdToken, AuthProvider authProvider) {
-        this.username = username;
-        this.email = email;
-        this.imageUrl = imageUrl;
-        this.accessToken = accessToken;
-        this.firebaseIdToken = firebaseIdToken;
-        this.authProvider = authProvider;
     }
 }

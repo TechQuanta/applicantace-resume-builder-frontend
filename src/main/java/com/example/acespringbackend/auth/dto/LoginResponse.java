@@ -1,7 +1,7 @@
+// LoginResponse.java
 package com.example.acespringbackend.auth.dto;
 
 public class LoginResponse {
-
     private String token;
     private String username;
 

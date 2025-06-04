@@ -5,14 +5,23 @@ public class SignUpRequest {
     private String username;
     private String email;
     private String password;
+    private String name;
+    private String linkedinProfileUrl;
+    private String token;
 
     public SignUpRequest() {}
 
-    public SignUpRequest(String username, String email, String password) {
+    public SignUpRequest(String username, String email, String password, String name,
+                         String linkedinProfileUrl, String token) {
         this.username = username;
         this.email = email;
         this.password = password;
+        this.name = name;
+        this.linkedinProfileUrl = linkedinProfileUrl;
+        this.token = token;
     }
+
+    // Getters and Setters
 
     public String getUsername() {
         return username;
@@ -36,5 +45,29 @@ public class SignUpRequest {
 
     public void setPassword(String password) {
         this.password = password;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public void setName(String name) {
+        this.name = name;
+    }
+
+    public String getLinkedinProfileUrl() {
+        return linkedinProfileUrl;
+    }
+
+    public void setLinkedinProfileUrl(String linkedinProfileUrl) {
+        this.linkedinProfileUrl = linkedinProfileUrl;
+    }
+
+    public String getToken() {
+        return token;
+    }
+
+    public void setToken(String token) {
+        this.token = token;
     }
 }

@@ -8,7 +8,7 @@ import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
 
 @RestController
-@RequestMapping("/ace/auth")
+@RequestMapping("/ace/auth") // Base path for auth
 public class FirebaseController {
 
     private final FirebaseAuthService firebaseAuthService;
@@ -17,13 +17,15 @@ public class FirebaseController {
         this.firebaseAuthService = firebaseAuthService;
     }
 
-    @PostMapping("/google")
+    @PostMapping("/google") // Specific endpoint for Google login
     public Mono<ResponseEntity<GoogleAuthResponse>> loginWithGoogle(@RequestBody GoogleAuthRequest request) {
         return firebaseAuthService.authenticate(request)
                 .map(ResponseEntity::ok)
-                .onErrorResume(e ->
-                        Mono.just(ResponseEntity.badRequest()
-                                .body(new GoogleAuthResponse(null, null, null, null, "error: " + e.getMessage())))
-                );
+                .onErrorResume(e -> {
+                    System.err.println("Controller error during Google login: " + e.getMessage()); // Log error
+                    // Return a proper error response body
+                    return Mono.just(ResponseEntity.badRequest()
+                            .body(new GoogleAuthResponse(null, null, null, null, "error: " + e.getMessage())));
+                });
     }
 }
