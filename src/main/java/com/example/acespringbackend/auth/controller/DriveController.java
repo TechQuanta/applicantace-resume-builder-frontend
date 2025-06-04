@@ -1,11 +1,13 @@
 package com.example.acespringbackend.auth.controller;
 
-import com.example.acespringbackend.drive.DriveService;
+import com.example.acespringbackend.service.DriveService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import reactor.core.publisher.Mono;
+
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/drive")
@@ -39,9 +41,11 @@ public class DriveController {
 
     // 3. List all files
     @GetMapping("/list")
-    public Mono<ResponseEntity<?>> listUserFiles(@RequestParam String email) {
+    public Mono<ResponseEntity<List<String>>> listUserFiles(@RequestParam String email) {
         return driveService.listFiles(email)
                 .map(ResponseEntity::ok)
-                .onErrorResume(ex -> Mono.just(ResponseEntity.badRequest().body("Error: " + ex.getMessage())));
+                .onErrorResume(ex -> Mono.just(ResponseEntity.badRequest().body(List.of())));
     }
+
+
 }
