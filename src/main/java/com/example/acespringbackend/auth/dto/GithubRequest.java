@@ -1,19 +1,34 @@
+// src/main/java/com/ace/auth/dto/GithubAuthRequest.java
 package com.example.acespringbackend.auth.dto;
 
 public class GithubRequest {
-    private String code;
+    // This is the Firebase ID Token obtained from the Firebase SDK on the frontend
+    // after successful authentication with GitHub via Firebase.
+    private String idToken;
 
-    public void GithubRequest() {}
-
-    public void GithubRequest(String code) {
-        this.code = code;
+    // Default constructor is important for JSON deserialization
+    public GithubRequest() {
     }
 
-    public String getCode() {
-        return code;
+    // Constructor with all fields
+    public GithubRequest(String idToken) {
+        this.idToken = idToken;
     }
 
-    public void setCode(String code) {
-        this.code = code;
+    // Getter for idToken
+    public String getIdToken() {
+        return idToken;
+    }
+
+    // Setter for idToken
+    public void setIdToken(String idToken) {
+        this.idToken = idToken;
+    }
+
+    @Override
+    public String toString() {
+        return "GithubAuthRequest{" +
+               "idToken='" + idToken + '\'' +
+               '}';
     }
 }
