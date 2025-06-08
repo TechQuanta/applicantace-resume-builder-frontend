@@ -92,7 +92,11 @@
             <artifactId>jte-spring-boot-starter-3</artifactId>
             <version>3.1.16</version>
         </dependency>
-
+		<dependency>
+    <groupId>com.adobe.documentservices</groupId>
+    <artifactId>pdfservices-sdk</artifactId>
+    <version>4.3.0</version>
+</dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
@@ -126,7 +130,7 @@
             <groupId>org.json</groupId>
             <artifactId>json</artifactId>
             <version>20231013</version>
-        </dependency>
+        </dependency>
         <dependency>
             <groupId>com.example</groupId>
             <artifactId>Backend</artifactId>
