@@ -1,4 +1,3 @@
-// src/main/java/com/example/acespringbackend/service/WebSiteAuth.java
 package com.example.acespringbackend.service;
 
 import com.example.acespringbackend.auth.dto.LoginRequest;
@@ -61,6 +60,12 @@ public class WebSiteAuth {
         return bytes / (1024.0 * 1024.0);
     }
 
+    /**
+     * Sends an OTP for user registration. The driveFolderId and authProvider are not
+     * available at this initial step.
+     * @param request SignUpRequest containing user email.
+     * @return Mono of SignUpResponse indicating OTP sent status.
+     */
     public Mono<SignUpResponse> sendOtpForSignup(SignUpRequest request) {
         String otp = generateOtp();
         otpStore.put(request.getEmail(), otp);
@@ -71,6 +76,8 @@ public class WebSiteAuth {
                     .email(request.getEmail())
                     .message("OTP sent to email")
                     .currentStorageUsageMb(0.0)
+                    .driveFolderId(null) // Drive folder ID not available at this step
+                    .authProvider(User.AuthProvider.WEBSITE.name()) // Assuming WEBSITE as auth provider
                     .build());
         } catch (Exception e) {
             log.error("Failed to send OTP email: {}", e.getMessage(), e);
@@ -78,6 +85,12 @@ public class WebSiteAuth {
         }
     }
 
+    /**
+     * Verifies the OTP provided by the user. Drive folder ID and authProvider are not
+     * fully established at this point.
+     * @param request OtpVerificationRequest containing email and OTP.
+     * @return Mono of SignUpResponse indicating OTP verification status.
+     */
     public Mono<SignUpResponse> verifyOtpAndSignup(OtpVerificationRequest request) {
         String savedOtp = otpStore.get(request.getEmail());
         if (savedOtp != null && savedOtp.equals(request.getOtp())) {
@@ -86,16 +99,28 @@ public class WebSiteAuth {
                     .email(request.getEmail())
                     .message("OTP verified")
                     .currentStorageUsageMb(0.0)
+                    .driveFolderId(null) // Drive folder ID not available at this step
+                    .authProvider(User.AuthProvider.WEBSITE.name()) // Assuming WEBSITE as auth provider
                     .build());
         } else {
             return Mono.just(SignUpResponse.builder()
                     .email(request.getEmail())
                     .message("Invalid or expired OTP")
                     .currentStorageUsageMb(0.0)
+                    .driveFolderId(null) // Drive folder ID not available at this step
+                    .authProvider(User.AuthProvider.WEBSITE.name()) // Assuming WEBSITE as auth provider
                     .build());
         }
     }
 
+    /**
+     * Completes the user signup process after OTP verification. This involves
+     * saving user details and creating a dedicated Google Drive folder for them.
+     * The driveFolderId and authProvider are fully populated here.
+     *
+     * @param request SignUpRequest containing full user details.
+     * @return Mono of SignUpResponse with user details, JWT, and drive folder ID.
+     */
     public Mono<SignUpResponse> completeSignup(SignUpRequest request) {
         return userRepository.findByEmail(request.getEmail())
                 .flatMap(existingUser -> {
@@ -107,6 +132,8 @@ public class WebSiteAuth {
                                 .linkedinUrl(existingUser.getLinkedinProfileUrl())
                                 .message("User already exists")
                                 .currentStorageUsageMb(bytesToMegabytes(existingUser.getCurrentDriveUsageBytes()))
+                                .driveFolderId(existingUser.getDriveFolderId()) // Include existing folder ID
+                                .authProvider(existingUser.getAuthProvider() != null ? existingUser.getAuthProvider().name() : null) // Include auth provider
                                 .build());
                     } else if (existingUser != null && !existingUser.getEmailVerified()) {
                         log.info("Updating unverified user for signup completion: {}", existingUser.getEmail());
@@ -114,6 +141,7 @@ public class WebSiteAuth {
                         existingUser.setPassword(passwordEncoder.encode(request.getPassword()));
                         existingUser.setEmailVerified(true);
                         existingUser.setLastLogin(LocalDateTime.now());
+                        existingUser.setAuthProvider(User.AuthProvider.WEBSITE); // Ensure auth provider is set
 
                         if (request.getLinkedinProfileUrl() != null && !request.getLinkedinProfileUrl().isEmpty()) {
                             existingUser.setLinkedinProfileUrl(request.getLinkedinProfileUrl());
@@ -124,7 +152,7 @@ public class WebSiteAuth {
                                         driveService.createUserFolderIfNotExists(savedUser.getEmail())
                                                 .flatMap(folderId -> {
                                                     savedUser.setDriveFolderId(folderId);
-                                                    savedUser.setCurrentDriveUsageBytes(0L);
+                                                    savedUser.setCurrentDriveUsageBytes(0L); // Initialize if not already
                                                     return userRepository.save(savedUser);
                                                 })
                                                 .map(finalSavedUser -> {
@@ -136,6 +164,8 @@ public class WebSiteAuth {
                                                             .message("Signup successful")
                                                             .token(token)
                                                             .currentStorageUsageMb(bytesToMegabytes(finalSavedUser.getCurrentDriveUsageBytes()))
+                                                            .driveFolderId(finalSavedUser.getDriveFolderId()) // Include new folder ID
+                                                            .authProvider(finalSavedUser.getAuthProvider() != null ? finalSavedUser.getAuthProvider().name() : null) // Include auth provider
                                                             .build();
                                                 })
                                                 .onErrorResume(driveEx -> {
@@ -145,19 +175,20 @@ public class WebSiteAuth {
                                                 })
                                 );
                     }
-                    return Mono.empty();
+                    return Mono.empty(); // Should not happen if previous checks are robust
                 })
                 .switchIfEmpty(Mono.defer(() -> {
+                    // This block handles a truly new user (not just unverified existing)
                     User newUser = new User();
-                    newUser.setId(UUID.randomUUID().toString());
+                    newUser.setId(UUID.randomUUID().toString()); // Generate a unique ID for new user
                     newUser.setUsername(request.getUsername());
                     newUser.setEmail(request.getEmail());
                     newUser.setPassword(passwordEncoder.encode(request.getPassword()));
                     newUser.setEmailVerified(true);
-                    newUser.setAuthProvider(User.AuthProvider.WEBSITE);
+                    newUser.setAuthProvider(User.AuthProvider.WEBSITE); // Explicitly set auth provider
                     newUser.setCreatedAt(LocalDateTime.now());
                     newUser.setLastLogin(LocalDateTime.now());
-                    newUser.setCurrentDriveUsageBytes(0L);
+                    newUser.setCurrentDriveUsageBytes(0L); // Initialize storage usage
 
                     if (request.getLinkedinProfileUrl() != null && !request.getLinkedinProfileUrl().isEmpty()) {
                         newUser.setLinkedinProfileUrl(request.getLinkedinProfileUrl());
@@ -168,7 +199,7 @@ public class WebSiteAuth {
                                     driveService.createUserFolderIfNotExists(savedUser.getEmail())
                                             .flatMap(folderId -> {
                                                 savedUser.setDriveFolderId(folderId);
-                                                return userRepository.save(savedUser);
+                                                return userRepository.save(savedUser); // Save user with folder ID
                                             })
                                             .map(finalSavedUser -> {
                                                 String token = jwtUtility.generateToken(finalSavedUser.getEmail());
@@ -179,6 +210,8 @@ public class WebSiteAuth {
                                                         .message("Signup successful")
                                                         .token(token)
                                                         .currentStorageUsageMb(bytesToMegabytes(finalSavedUser.getCurrentDriveUsageBytes()))
+                                                        .driveFolderId(finalSavedUser.getDriveFolderId()) // Include new folder ID
+                                                        .authProvider(finalSavedUser.getAuthProvider() != null ? finalSavedUser.getAuthProvider().name() : null) // Include auth provider
                                                         .build();
                                             })
                                             .onErrorResume(driveEx -> {
@@ -190,6 +223,12 @@ public class WebSiteAuth {
                 }));
     }
 
+    /**
+     * Handles user login for website-authenticated users. Populates the
+     * driveFolderId and authProvider in the LoginResponse.
+     * @param request LoginRequest containing user credentials.
+     * @return Mono of LoginResponse with JWT, user details, and drive folder ID.
+     */
     public Mono<LoginResponse> login(LoginRequest request) {
         return userRepository.findByEmail(request.getEmail())
                 .flatMap(user -> {
@@ -197,12 +236,16 @@ public class WebSiteAuth {
                         log.warn("Login attempt failed for user {}: Invalid credentials.", request.getEmail());
                         return Mono.just(LoginResponse.builder()
                                 .message("Invalid email or password")
+                                .driveFolderId(null) // Not available for failed login
+                                .authProvider(null) // Not available for failed login
                                 .build());
                     }
                     if (!user.getEmailVerified()) {
                         log.warn("Login attempt failed for user {}: Email not verified.", request.getEmail());
                         return Mono.just(LoginResponse.builder()
                                 .message("Email not verified. Please complete signup process.")
+                                .driveFolderId(user.getDriveFolderId()) // Could be available if partially signed up
+                                .authProvider(user.getAuthProvider() != null ? user.getAuthProvider().name() : null) // Could be available
                                 .build());
                     }
                     String token = jwtUtility.generateToken(user.getEmail());
@@ -211,18 +254,24 @@ public class WebSiteAuth {
                             .username(user.getUsername())
                             .message("Login successful")
                             .currentStorageUsageMb(bytesToMegabytes(user.getCurrentDriveUsageBytes()))
+                            .driveFolderId(user.getDriveFolderId()) // Include folder ID on successful login
+                            .authProvider(user.getAuthProvider() != null ? user.getAuthProvider().name() : null) // Include auth provider on successful login
                             .build());
                 })
                 .switchIfEmpty(Mono.defer(() -> {
                     log.warn("Login attempt failed: User not found for email {}.", request.getEmail());
                     return Mono.just(LoginResponse.builder()
                             .message("User not found")
+                            .driveFolderId(null) // Not available
+                            .authProvider(null) // Not available
                             .build());
                 }))
                 .onErrorResume(e -> {
                     log.error("An unexpected error occurred during login for user {}: {}", request.getEmail(), e.getMessage(), e);
                     return Mono.just(LoginResponse.builder()
                             .message("An unexpected error occurred during login.")
+                            .driveFolderId(null) // Not available on unexpected error
+                            .authProvider(null) // Not available on unexpected error
                             .build());
                 });
     }

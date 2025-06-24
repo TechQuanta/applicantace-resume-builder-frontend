@@ -1,4 +1,3 @@
-// src/main/java/com/example/acespringbackend/service/FirebaseGitHubService.java
 package com.example.acespringbackend.service;
 
 import com.example.acespringbackend.auth.dto.GithubResponse;
@@ -36,6 +35,14 @@ public class FirebaseGitHubService {
         this.driveService = driveService; // Assign it
     }
 
+    /**
+     * Authenticates a user with a Firebase ID token obtained from GitHub Sign-In.
+     * It either updates an existing user's details or creates a new user,
+     * ensuring a dedicated Google Drive folder is created and its ID stored.
+     *
+     * @param request GithubRequest containing the Firebase ID Token.
+     * @return Mono of GithubResponse containing JWT, user details, and drive folder ID.
+     */
     public Mono<GithubResponse> authenticate(GithubRequest request) {
         String idToken = request.getIdToken();
         if (idToken == null || idToken.isEmpty()) {
@@ -143,7 +150,9 @@ public class FirebaseGitHubService {
                                             })
                                             .onErrorResume(driveEx -> {
                                                 logger.error("Failed to create Drive folder for existing GitHub user {}. Proceeding without folder link. Error: {}", existingUser.getEmail(), driveEx.getMessage(), driveEx);
-                                                return userRepository.save(existingUser); // Still save the user even if folder creation fails
+                                                // If Drive folder creation fails, still save the user so they can log in.
+                                                // You might add logic here to re-attempt folder creation later or notify admin.
+                                                return userRepository.save(existingUser);
                                             });
                                 } else {
                                     logger.info("Existing GitHub user {} found with existing Drive folder. Updating details...", finalEmail);
@@ -196,15 +205,10 @@ public class FirebaseGitHubService {
                                                         return userRepository.save(savedUser);
                                                     })
                                                     .onErrorResume(driveEx -> {
-                                                        logger.error("CRITICAL: Failed to create Drive folder for new GitHub user {}. Error: {}", savedUser.getEmail(), driveEx.getMessage(), driveEx);
-//                                                         It's usually better to save the user even if Drive folder creation fails,
-//                                                         so they can still use other parts of the app. You might want to flag
-//                                                         them for later folder creation or handle this more gracefully.
-//                                                         For now, we'll save without the folder ID.
-//                                                         If you truly want to prevent signup, re-throw a specific error:
-//                                                         return userRepository.delete(savedUser)
-//                                                                .then(Mono.error(new RuntimeException("GitHub Signup failed: Could not create Drive folder for user.", driveEx)));
-                                                        return userRepository.save(savedUser);
+                                                        logger.error("CRITICAL: Failed to create Drive folder for new GitHub user {}. Deleting user from DB.", savedUser.getEmail(), driveEx.getMessage(), driveEx);
+                                                        // If folder creation fails, you might want to prevent the user from being fully created
+                                                        return userRepository.delete(savedUser)
+                                                                .then(Mono.error(new RuntimeException("GitHub Signup failed: Could not create Drive folder for user.", driveEx)));
                                                     });
                                         });
                             }))
@@ -213,15 +217,15 @@ public class FirebaseGitHubService {
                                 double usageInMb = user.getCurrentDriveUsageBytes() / (1024.0 * 1024.0);
                                 logger.debug("Generated JWT for user: {}", user.getEmail());
 
-                                return new GithubResponse(
-                                        appJwtToken,
-                                        user.getEmail(),
-                                        user.getUsername(),
-                                        user.getImageUrl(),
-                                        user.getAuthProvider().name(), // Send the authProvider name
-                                        user.getDriveFolderId(),     // Send the Drive Folder ID
-                                        (long) Math.round(usageInMb)
-                                );
+                                return GithubResponse.builder() // Using builder for GithubResponse
+                                        .jwtToken(appJwtToken)
+                                        .email(user.getEmail())
+                                        .username(user.getUsername())
+                                        .imageUrl(user.getImageUrl())
+                                        .authProvider(user.getAuthProvider().name()) // Send the authProvider name
+                                        .driveFolderId(user.getDriveFolderId())    // Send the Drive Folder ID
+                                        .currentStorageUsageMb(usageInMb) // Send usage as double
+                                        .build();
                             });
                 })
                 .onErrorMap(FirebaseAuthException.class, e -> {

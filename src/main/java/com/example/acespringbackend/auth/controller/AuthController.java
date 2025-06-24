@@ -1,4 +1,3 @@
-// auth/controller/AuthController.java (Corrected onErrorResume using @Builder)
 package com.example.acespringbackend.auth.controller;
 
 import com.example.acespringbackend.auth.dto.*;
@@ -29,7 +28,10 @@ public class AuthController {
                 .onErrorResume(e -> {
                     logger.error("Error sending OTP for {}: {}", request.getEmail(), e.getMessage());
                     return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                            .body(SignUpResponse.builder().email(request.getEmail()).message("Failed to send OTP. Please try again.").build()));
+                            .body(SignUpResponse.builder()
+                                    .email(request.getEmail())
+                                    .message("Failed to send OTP. Please try again.")
+                                    .build()));
                 });
     }
 
@@ -67,7 +69,10 @@ public class AuthController {
                 .onErrorResume(e -> {
                     logger.error("Unexpected error during signup for {}: {}", request.getEmail(), e.getMessage());
                     return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                            .body(SignUpResponse.builder().email(request.getEmail()).message("An unexpected error occurred during signup.").build()));
+                            .body(SignUpResponse.builder()
+                                    .email(request.getEmail())
+                                    .message("An unexpected error occurred during signup.")
+                                    .build()));
                 });
     }
 
@@ -76,11 +81,6 @@ public class AuthController {
     public Mono<ResponseEntity<LoginResponse>> login(@RequestBody LoginRequest request) {
         return authService.login(request)
                 .map(response -> {
-                    // It's still crucial to fix the logic here, as discussed previously.
-                    // This `map` block should check `response.getToken() != null` or login-specific messages.
-                    // For the sake of fixing the redline, I'm keeping the original logic for now,
-                    // but strongly recommend you replace it with the corrected logic from our previous conversation.
-
                     if (response.getToken() != null && !response.getToken().isEmpty()) { // Correct success check for login
                         logger.info("User logged in successfully: {}", request.getEmail());
                         return ResponseEntity.ok(response);
@@ -97,12 +97,14 @@ public class AuthController {
                 })
                 .onErrorResume(e -> {
                     logger.error("Unexpected error during login for {}: {}", request.getEmail(), e.getMessage());
-                    // FIX: Use the @Builder pattern to create LoginResponse
+                    // FIX: Use the @Builder pattern to create LoginResponse and include new fields
                     return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                             .body(LoginResponse.builder()
                                     .token(null)
                                     .username(null) // Or request.getEmail() if you want to pass it
                                     .message("An unexpected error occurred during login.")
+                                    .driveFolderId(null) // Set to null on error
+                                    .authProvider(null) // Set to null on error
                                     .build()));
                 });
     }

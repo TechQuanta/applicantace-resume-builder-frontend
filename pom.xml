@@ -6,7 +6,8 @@
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
         <version>3.5.0</version>
-        <relativePath/> </parent>
+        <relativePath/>
+    </parent>
     <groupId>com.example</groupId>
     <artifactId>AceSpringBackend</artifactId>
     <version>0.0.1-SNAPSHOT</version>
@@ -88,15 +89,19 @@
             <artifactId>spring-boot-starter-webflux</artifactId>
         </dependency>
         <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+        <dependency>
             <groupId>gg.jte</groupId>
             <artifactId>jte-spring-boot-starter-3</artifactId>
             <version>3.1.16</version>
         </dependency>
 		<dependency>
-    <groupId>com.adobe.documentservices</groupId>
-    <artifactId>pdfservices-sdk</artifactId>
-    <version>4.3.0</version>
-</dependency>
+            <groupId>com.adobe.documentservices</groupId>
+            <artifactId>pdfservices-sdk</artifactId>
+            <version>4.3.0</version>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
@@ -129,17 +134,16 @@
         <dependency>
             <groupId>org.json</groupId>
             <artifactId>json</artifactId>
-            <version>20231013</version>
-        </dependency>
-        <dependency>
-            <groupId>com.example</groupId>
-            <artifactId>Backend</artifactId>
-            <version>0.0.1-SNAPSHOT</version>
+            <version>20250517</version>
         </dependency>
     </dependencies>
 
     <build>
         <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
             <plugin>
                 <groupId>gg.jte</groupId>
                 <artifactId>jte-maven-plugin</artifactId>

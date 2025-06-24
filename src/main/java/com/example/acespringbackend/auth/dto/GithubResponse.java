@@ -1,6 +1,6 @@
 package com.example.acespringbackend.auth.dto;
 
-// No Lombok imports needed
+// No Lombok imports needed anymore
 
 public class GithubResponse {
 
@@ -8,18 +8,16 @@ public class GithubResponse {
     private String email;
     private String username;
     private String imageUrl;
-    private String authProvider; // Will be "GITHUB" for this response
+    private String authProvider; // Will be "GITHUB" for this response, now initialized properly
     private String driveFolderId; // User's dedicated Google Drive folder ID
     private double currentStorageUsageMb; // Added field for current storage usage
 
     // --- Constructors ---
 
-    // No-argument constructor
-    public GithubResponse() {
-    }
+
 
     // All-argument constructor
-    public GithubResponse(String jwtToken, String email, String username, String imageUrl, String authProvider, String driveFolderId, double currentStorageUsageMb) {
+    public GithubResponse(String jwtToken, String email, String username, String imageUrl, String authProvider, String driveFolderId, Object object, double currentStorageUsageMb) {
         this.jwtToken = jwtToken;
         this.email = email;
         this.username = username;
@@ -27,6 +25,17 @@ public class GithubResponse {
         this.authProvider = authProvider;
         this.driveFolderId = driveFolderId;
         this.currentStorageUsageMb = currentStorageUsageMb;
+    }
+
+    // Private constructor for the Builder pattern
+    private GithubResponse(Builder builder) {
+        this.jwtToken = builder.jwtToken;
+        this.email = builder.email;
+        this.username = builder.username;
+        this.imageUrl = builder.imageUrl;
+        this.authProvider = builder.authProvider;
+        this.driveFolderId = builder.driveFolderId;
+        this.currentStorageUsageMb = builder.currentStorageUsageMb;
     }
 
     // --- Getters ---
@@ -89,10 +98,67 @@ public class GithubResponse {
         this.currentStorageUsageMb = currentStorageUsageMb;
     }
 
+    // --- Builder Pattern ---
+    public static Builder builder() {
+        return new Builder();
+    }
+
+    public static class Builder {
+        private String jwtToken;
+        private String email;
+        private String username;
+        private String imageUrl;
+        private String authProvider;
+        private String driveFolderId;
+        private double currentStorageUsageMb;
+
+        private Builder() {
+        }
+
+        public Builder jwtToken(String jwtToken) {
+            this.jwtToken = jwtToken;
+            return this;
+        }
+
+        public Builder email(String email) {
+            this.email = email;
+            return this;
+        }
+
+        public Builder username(String username) {
+            this.username = username;
+            return this;
+        }
+
+        public Builder imageUrl(String imageUrl) {
+            this.imageUrl = imageUrl;
+            return this;
+        }
+
+        public Builder authProvider(String authProvider) {
+            this.authProvider = authProvider;
+            return this;
+        }
+
+        public Builder driveFolderId(String driveFolderId) {
+            this.driveFolderId = driveFolderId;
+            return this;
+        }
+
+        public Builder currentStorageUsageMb(double currentStorageUsageMb) {
+            this.currentStorageUsageMb = currentStorageUsageMb;
+            return this;
+        }
+
+        public GithubResponse build() {
+            return new GithubResponse(this);
+        }
+    }
+
     @Override
     public String toString() {
         return "GithubResponse{" +
-               "jwtToken='" + jwtToken + '\'' +
+               "jwtToken='" + "[PROTECTED]" + '\'' + // Mask token for security in toString
                ", email='" + email + '\'' +
                ", username='" + username + '\'' +
                ", imageUrl='" + imageUrl + '\'' +

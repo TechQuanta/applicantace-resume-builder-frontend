@@ -10,6 +10,8 @@ public class SignUpResponse {
     private String message;
     private String token; // Will only be present in the final step of signup
     private double currentStorageUsageMb; // Initial usage will be 0.0 for new users
+    private String driveFolderId; // Added to send the user's root drive folder ID
+    private String authProvider; // NEW: Added to indicate the authentication provider
 
     // --- Constructors ---
 
@@ -18,13 +20,15 @@ public class SignUpResponse {
     }
 
     // All-argument constructor (replaces @AllArgsConstructor)
-    public SignUpResponse(String email, String username, String linkedinUrl, String message, String token, double currentStorageUsageMb) {
+    public SignUpResponse(String email, String username, String linkedinUrl, String message, String token, double currentStorageUsageMb, String driveFolderId, String authProvider) {
         this.email = email;
         this.username = username;
         this.linkedinUrl = linkedinUrl;
         this.message = message;
         this.token = token;
         this.currentStorageUsageMb = currentStorageUsageMb;
+        this.driveFolderId = driveFolderId;
+        this.authProvider = authProvider; // Initialize new field
     }
 
     // Private constructor for the Builder pattern
@@ -35,6 +39,8 @@ public class SignUpResponse {
         this.message = builder.message;
         this.token = builder.token;
         this.currentStorageUsageMb = builder.currentStorageUsageMb;
+        this.driveFolderId = builder.driveFolderId;
+        this.authProvider = builder.authProvider; // Initialize new field from builder
     }
 
     // --- Getters --- (replaces @Getter)
@@ -63,6 +69,14 @@ public class SignUpResponse {
         return currentStorageUsageMb;
     }
 
+    public String getDriveFolderId() {
+        return driveFolderId;
+    }
+
+    public String getAuthProvider() {
+        return authProvider;
+    }
+
     // --- Setters --- (replaces @Setter)
 
     public void setEmail(String email) {
@@ -89,6 +103,14 @@ public class SignUpResponse {
         this.currentStorageUsageMb = currentStorageUsageMb;
     }
 
+    public void setDriveFolderId(String driveFolderId) {
+        this.driveFolderId = driveFolderId;
+    }
+
+    public void setAuthProvider(String authProvider) {
+        this.authProvider = authProvider;
+    }
+
     // --- Builder Pattern --- (replaces @Builder)
 
     public static Builder builder() {
@@ -102,6 +124,8 @@ public class SignUpResponse {
         private String message;
         private String token;
         private double currentStorageUsageMb;
+        private String driveFolderId;
+        private String authProvider; // NEW: Added to builder
 
         // Private constructor for the Builder class itself
         private Builder() {
@@ -137,6 +161,16 @@ public class SignUpResponse {
             return this;
         }
 
+        public Builder driveFolderId(String driveFolderId) {
+            this.driveFolderId = driveFolderId;
+            return this;
+        }
+
+        public Builder authProvider(String authProvider) {
+            this.authProvider = authProvider;
+            return this;
+        }
+
         public SignUpResponse build() {
             return new SignUpResponse(this);
         }
@@ -151,6 +185,8 @@ public class SignUpResponse {
                ", message='" + message + '\'' +
                ", token='" + (token != null ? "[PROTECTED]" : "null") + '\'' + // Mask token for security
                ", currentStorageUsageMb=" + currentStorageUsageMb +
+               ", driveFolderId='" + driveFolderId + '\'' +
+               ", authProvider='" + authProvider + '\'' + // Include in toString
                '}';
     }
 }

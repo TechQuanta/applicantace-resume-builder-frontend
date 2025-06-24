@@ -1,9 +1,121 @@
-// src/main/java/com/example/acespringbackend/auth/controller/DriveController.java
+//package com.example.acespringbackend.auth.controller;
+//
+//import com.example.acespringbackend.auth.dto.FileUploadRequest; // Import the new DTO
+//import com.example.acespringbackend.auth.dto.FileUploadResponse;
+//import com.example.acespringbackend.service.DriveService;
+//
+//import org.slf4j.Logger;
+//import org.slf4j.LoggerFactory;
+//import org.springframework.beans.factory.annotation.Autowired;
+//import org.springframework.beans.factory.annotation.Value;
+//import org.springframework.http.HttpStatus;
+//import org.springframework.http.ResponseEntity;
+//import org.springframework.web.bind.annotation.*;
+//import org.springframework.web.multipart.MultipartFile;
+//import reactor.core.publisher.Mono;
+//
+//@RestController
+//@RequestMapping("/ace/drive")
+//public class DriveController {
+//
+//    private static final Logger logger = LoggerFactory.getLogger(DriveController.class);
+//
+//    private final DriveService driveService;
+//
+//    @Value("${user.drive.quota.mb:10}")
+//    private double userDriveQuotaMb;
+//
+//    @Autowired
+//    public DriveController(DriveService driveService) { // Constructor injection
+//        this.driveService = driveService;
+//    }
+//
+//    /**
+//     * Handles file uploads to Google Drive, associating the file with a user
+//     * identified by their email, and uploading to a specified folder ID.
+//     * The file, user email, and folder ID are all sent as part of a single form data request.
+//     *
+//     * @param file The MultipartFile to be uploaded, part of the form data.
+//     * @param request A FileUploadRequest object containing userEmail and folderId, bound from form data.
+//     * @return A Mono emitting a ResponseEntity with FileUploadResponse, indicating success or failure.
+//     */
+//    @PostMapping("/upload")
+//    public Mono<ResponseEntity<FileUploadResponse>> uploadFile(
+//            @RequestPart("file") MultipartFile file, // File is still a separate part
+//            @ModelAttribute FileUploadRequest request) { // Use @ModelAttribute for the DTO containing other form fields
+//
+//        String userEmail = request.getUserEmail();
+//        String folderId = request.getFolderId();
+//
+//        logger.info("Received file upload request for folderId: {} from user: {}", folderId, userEmail);
+//
+//        if (file.isEmpty()) {
+//            logger.warn("Received empty file for upload for folderId: {} from user: {}", folderId, userEmail);
+//            return Mono.just(ResponseEntity.badRequest().body(new FileUploadResponse(
+//                    false, "File is empty. Please select a non-empty file.",
+//                    null, null, null, 0.0, 0.0)));
+//        }
+//
+//        if (userEmail == null || userEmail.trim().isEmpty()) {
+//            logger.warn("User email is missing for upload to folderId: {}", folderId);
+//            return Mono.just(ResponseEntity.badRequest().body(new FileUploadResponse(
+//                    false, "User email is required for file upload.",
+//                    null, null, null, 0.0, 0.0)));
+//        }
+//
+//        if (folderId == null || folderId.trim().isEmpty()) {
+//            logger.warn("Folder ID is missing for upload from user: {}", userEmail);
+//            return Mono.just(ResponseEntity.badRequest().body(new FileUploadResponse(
+//                    false, "Folder ID is required for file upload.",
+//                    null, null, null, 0.0, 0.0)));
+//        }
+//
+//        logger.info("Successfully received file: {}", file.getOriginalFilename());
+//
+//        // Pass the userEmail, file, and folderId to the DriveService
+//        return driveService.uploadFile(userEmail, file, folderId)
+//                .map(response -> {
+//                    if (response.getSuccess()) {
+//                        logger.info("File upload successful for folderId {} and user {}. File ID: {}", folderId, userEmail, response.getDriveFileId());
+//                        return ResponseEntity.ok(response);
+//                    } else {
+//                        logger.error("File upload failed for folderId {} and user {}: {}", folderId, userEmail, response.getMessage());
+//                        if (response.getMessage().contains("User not found")) {
+//                            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
+//                        } else if (response.getMessage().contains("exceeds individual upload limit") ||
+//                                   response.getMessage().contains("overall storage quota exceeded")) {
+//                            return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).body(response);
+//                        } else if (response.getMessage().contains("Drive folder not initialized") || response.getMessage().contains("Target folder ID for upload is missing")) {
+//                            return ResponseEntity.status(HttpStatus.CONFLICT).body(response);
+//                        }
+//                        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+//                    }
+//                })
+//                .onErrorResume(e -> {
+//                    logger.error("Controller error during file upload for folderId {} and user {}: {}", folderId, userEmail, e.getMessage(), e);
+//                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(new FileUploadResponse(
+//                            false, "An unexpected error occurred during file upload: " + e.getMessage(),
+//                            null, null, null, 0.0, 0.0)));
+//                });
+//    }
+//
+//    // Keep other methods if they are still needed for authenticated operations.
+//    // If you uncomment them later, remember they might need proper @AuthenticationPrincipal logic.
+//}
 package com.example.acespringbackend.auth.controller;
 
+import com.example.acespringbackend.auth.dto.DeleteResponse;
+import com.example.acespringbackend.auth.dto.DeleteRequest;
+import com.example.acespringbackend.auth.dto.FileDetail;
+import com.example.acespringbackend.auth.dto.FileListResponse;
+import com.example.acespringbackend.auth.dto.ListRequest; // ADDED: Import FileListRequest for the POST body
+import com.example.acespringbackend.auth.dto.FileUploadRequest;
 import com.example.acespringbackend.auth.dto.FileUploadResponse;
-import com.example.acespringbackend.auth.dto.FileViewResponse;
+// REMOVED: import com.example.acespringbackend.auth.dto.FileNameListResponse; (as it's not used in your provided code)
 import com.example.acespringbackend.service.DriveService;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -12,11 +124,16 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import reactor.core.publisher.Mono;
 
+import java.util.Collections;
 import java.util.List;
+// REMOVED: import java.util.stream.Collectors; (as it's not used in your provided code after removing getAllFileNames)
+
 
 @RestController
-@RequestMapping("/api/drive")
+@RequestMapping("/ace/drive")
 public class DriveController {
+
+    private static final Logger logger = LoggerFactory.getLogger(DriveController.class);
 
     private final DriveService driveService;
 
@@ -24,89 +141,182 @@ public class DriveController {
     private double userDriveQuotaMb;
 
     @Autowired
-    public DriveController(DriveService driveService) {
+    public DriveController(DriveService driveService) { // Constructor injection
         this.driveService = driveService;
     }
 
-    // 1. Create folder for user
-    @PostMapping("/create-folder")
-    public Mono<ResponseEntity<String>> createUserFolder(@RequestParam String email) {
-        return driveService.createUserFolderIfNotExists(email)
-                .map(folderId -> ResponseEntity.ok("Drive folder created with ID: " + folderId))
-                .onErrorResume(ex -> Mono.just(ResponseEntity.badRequest().body("Error creating folder: " + ex.getMessage())));
-    }
-
-    // 2. Upload file
+    /**
+     * Handles file uploads to Google Drive, associating the file with a user
+     * identified by their email, and uploading to a specified folder ID.
+     * The file, user email, and folder ID are all sent as part of a single form data request.
+     *
+     * @param file The MultipartFile to be uploaded, part of the form data.
+     * @param request A FileUploadRequest object containing userEmail and folderId, bound from form data.
+     * @return A Mono emitting a ResponseEntity with FileUploadResponse, indicating success or failure.
+     */
     @PostMapping("/upload")
     public Mono<ResponseEntity<FileUploadResponse>> uploadFile(
-            @RequestParam String email,
-            @RequestParam MultipartFile file) {
-        return driveService.uploadFile(email, file)
-                .map(fileUploadResponse -> {
-                    // Using getSuccess() as per the updated FileUploadResponse DTO
-                    if (!fileUploadResponse.getSuccess()) {
-                        HttpStatus status;
-                        if (fileUploadResponse.getMessage() != null) {
-                            if (fileUploadResponse.getMessage().contains("quota exceeded") ||
-                                    fileUploadResponse.getMessage().contains("exceeds individual upload limit") ||
-                                    fileUploadResponse.getMessage().contains("empty file") ||
-                                    fileUploadResponse.getMessage().contains("Docs folder not found") ||
-                                    fileUploadResponse.getMessage().contains("User not found for file upload operation")) {
-                                status = HttpStatus.BAD_REQUEST;
-                            } else {
-                                status = HttpStatus.INTERNAL_SERVER_ERROR;
-                            }
-                        } else {
-                            status = HttpStatus.INTERNAL_SERVER_ERROR;
-                        }
-                        // If it's an error, return the appropriate status and body
-                        return ResponseEntity.status(status).body(fileUploadResponse);
+            @RequestPart("file") MultipartFile file, // File is still a separate part
+            @ModelAttribute FileUploadRequest request) { // Use @ModelAttribute for the DTO containing other form fields
+
+        String userEmail = request.getUserEmail();
+        String folderId = request.getFolderId();
+
+        logger.info("Received file upload request for folderId: {} from user: {}", folderId, userEmail);
+
+        if (file.isEmpty()) {
+            logger.warn("Received empty file for upload for folderId: {} from user: {}", folderId, userEmail);
+            return Mono.just(ResponseEntity.badRequest().body(new FileUploadResponse(
+                    false, "File is empty. Please select a non-empty file.",
+                    null, null, null, 0.0, 0.0)));
+        }
+
+        if (userEmail == null || userEmail.trim().isEmpty()) {
+            logger.warn("User email is missing for upload to folderId: {}", folderId);
+            return Mono.just(ResponseEntity.badRequest().body(new FileUploadResponse(
+                    false, "User email is required for file upload.",
+                    null, null, null, 0.0, 0.0)));
+        }
+
+        if (folderId == null || folderId.trim().isEmpty()) {
+            logger.warn("Folder ID is missing for upload from user: {}", userEmail);
+            return Mono.just(ResponseEntity.badRequest().body(new FileUploadResponse(
+                    false, "Folder ID is required for file upload.",
+                    null, null, null, 0.0, 0.0)));
+        }
+
+        logger.info("Successfully received file: {}", file.getOriginalFilename());
+
+        // Pass the userEmail, file, and folderId to the DriveService
+        return driveService.uploadFile(userEmail, file, folderId)
+                .map(response -> {
+                    if (response.getSuccess()) {
+                        logger.info("File upload successful for folderId {} and user {}. File ID: {}", folderId, userEmail, response.getDriveFileId());
+                        return ResponseEntity.ok(response);
                     } else {
-                        // If it's a success, return OK
-                        return ResponseEntity.ok(fileUploadResponse);
+                        logger.error("File upload failed for folderId {} and user {}: {}", folderId, userEmail, response.getMessage());
+                        if (response.getMessage().contains("User not found")) {
+                            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
+                        } else if (response.getMessage().contains("exceeds individual upload limit") ||
+                                   response.getMessage().contains("overall storage quota exceeded")) {
+                            return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).body(response);
+                        } else if (response.getMessage().contains("Drive folder not initialized") || response.getMessage().contains("Target folder ID for upload is missing")) {
+                            return ResponseEntity.status(HttpStatus.CONFLICT).body(response);
+                        }
+                        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
                     }
                 })
-                .onErrorResume(ex -> {
-                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(FileUploadResponse.builder()
-                            .success(false)
-                            .message("An unexpected error occurred during file upload: " + ex.getMessage())
-                            .maxStorageQuotaMb(userDriveQuotaMb)
-                            .build()));
+                .onErrorResume(e -> {
+                    logger.error("Controller error during file upload for folderId {} and user {}: {}", folderId, userEmail, e.getMessage(), e);
+                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(new FileUploadResponse(
+                            false, "An unexpected error occurred during file upload: " + e.getMessage(),
+                            null, null, null, 0.0, 0.0)));
                 });
     }
 
-    // 3. List files
-    @GetMapping("/list")
-    public Mono<ResponseEntity<List<String>>> listUserFiles(@RequestParam String email) {
-        return driveService.listFiles(email)
-                .map(ResponseEntity::ok)
-                .onErrorResume(ex -> Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(List.of())));
+    /**
+     * Retrieves all file details for a given user and folder.
+     * NOW ACCEPTS A POST REQUEST WITH A JSON BODY.
+     *
+     * @param request A FileListRequest object containing userEmail and folderId in the JSON body.
+     * @return A Mono emitting a ResponseEntity with FileListResponse, containing a list of file details.
+     */
+    @PostMapping("/files") // CHANGED: From @GetMapping to @PostMapping
+    public Mono<ResponseEntity<FileListResponse>> getAllFiles(
+            @RequestBody ListRequest request) { // CHANGED: From @RequestParam to @RequestBody FileListRequest
+
+        String userEmail = request.getUserEmail(); // CHANGED: Get from request DTO
+        String folderId = request.getFolderId();   // CHANGED: Get from request DTO
+
+        logger.info("Received POST request to get all files for folderId: {} from user: {}", folderId, userEmail);
+
+        if (userEmail == null || userEmail.trim().isEmpty()) {
+            logger.warn("User email is missing for getting all files for folderId: {}", folderId);
+            return Mono.just(ResponseEntity.badRequest().body(new FileListResponse(
+                    false, "User email is required to list files.",
+                    Collections.<FileDetail>emptyList(), 0.0, userDriveQuotaMb))); // FIX for type inference
+        }
+
+        if (folderId == null || folderId.trim().isEmpty()) {
+            logger.warn("Folder ID is missing for getting all files from user: {}", userEmail);
+            return Mono.just(ResponseEntity.badRequest().body(new FileListResponse(
+                    false, "Folder ID is required to list files.",
+                    Collections.<FileDetail>emptyList(), 0.0, userDriveQuotaMb))); // FIX for type inference
+        }
+
+        // Call the service layer to get file details
+        return driveService.getAllFileDetails(userEmail, folderId)
+                .map(response -> {
+                    if (response.getSuccess()) {
+                        logger.info("Successfully retrieved {} files for folderId {} and user {}",
+                                response.getFiles().size(), folderId, userEmail);
+                        return ResponseEntity.ok(response);
+                    } else {
+                        logger.error("Failed to retrieve files for folderId {} and user {}: {}",
+                                folderId, userEmail, response.getMessage());
+                        if (response.getMessage().contains("User not found")) {
+                            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
+                        } else if (response.getMessage().contains("Drive folder not initialized") || response.getMessage().contains("Target folder ID for listing is missing")) {
+                            return ResponseEntity.status(HttpStatus.CONFLICT).body(response);
+                        }
+                        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+                    }
+                })
+                .onErrorResume(e -> {
+                    logger.error("Controller error during getting all files for folderId {} and user {}: {}", folderId, userEmail, e.getMessage(), e);
+                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(new FileListResponse(
+                            false, "An unexpected error occurred while listing files: " + e.getMessage(),
+                            Collections.<FileDetail>emptyList(), 0.0, userDriveQuotaMb))); // FIX for type inference
+                });
     }
 
-    // Endpoint to create a Google Doc
-    @PostMapping("/create-doc")
-    public Mono<ResponseEntity<FileViewResponse>> createGoogleDoc(
-            @RequestParam String email,
-            @RequestParam String docTitle) {
-        return driveService.createGoogleDoc(email, docTitle)
-                .map(fileViewResponse -> ResponseEntity.status(HttpStatus.CREATED).body(fileViewResponse))
-                .onErrorResume(ex -> Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(FileViewResponse.builder()
-                        .success(false) // Added success field for error case
-                        .message("Error creating Google Doc: " + ex.getMessage())
-                        .build())));
-    }
+    /**
+     * Deletes a specific file from Google Drive and updates the user's storage usage.
+     *
+     * @param request A FileDeleteRequest object containing userEmail and fileId.
+     * @return A Mono emitting a ResponseEntity with DeleteResponse, indicating success or failure.
+     */
+    @DeleteMapping("/delete")
+    public Mono<ResponseEntity<DeleteResponse>> deleteFile(@RequestBody DeleteRequest request) {
+        String userEmail = request.getUserEmail();
+        String fileId = request.getFileId();
 
-    // Endpoint to get webViewLink for a specific file (by fileId)
-    @GetMapping("/view-file")
-    public Mono<ResponseEntity<FileViewResponse>> getFileWebViewLink(
-            @RequestParam String email,
-            @RequestParam String fileId) {
-        return driveService.getWebViewLinkForFile(email, fileId)
-                .map(ResponseEntity::ok)
-                .onErrorResume(ex -> Mono.just(ResponseEntity.status(HttpStatus.NOT_FOUND).body(FileViewResponse.builder()
-                        .success(false) // Added success field for error case
-                        .fileId(fileId) // Keep fileId in error response for context
-                        .message("Error retrieving file view link: " + ex.getMessage())
-                        .build())));
+        logger.info("Received request to delete file ID: {} for user: {}", fileId, userEmail);
+
+        if (userEmail == null || userEmail.trim().isEmpty()) {
+            logger.warn("User email is missing for file deletion for file ID: {}", fileId);
+            return Mono.just(ResponseEntity.badRequest().body(new DeleteResponse(
+                    false, "User email is required for file deletion.", fileId, 0L, 0.0, 0.0)));
+        }
+
+        if (fileId == null || fileId.trim().isEmpty()) {
+            logger.warn("File ID is missing for deletion from user: {}", userEmail);
+            return Mono.just(ResponseEntity.badRequest().body(new DeleteResponse(
+                    false, "File ID is required for deletion.", null, 0L, 0.0, 0.0)));
+        }
+
+        return driveService.deleteFile(userEmail, fileId)
+                .map(response -> {
+                    if (response.getSuccess()) {
+                        logger.info("File ID {} deleted successfully for user {}. New usage: {} MB.",
+                                fileId, userEmail, response.getCurrentStorageUsageMb());
+                        return ResponseEntity.ok(response);
+                    } else {
+                        logger.error("File deletion failed for file ID {} and user {}: {}",
+                                fileId, userEmail, response.getMessage());
+                        if (response.getMessage().contains("User not found")) {
+                            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
+                        } else if (response.getMessage().contains("File not found") || response.getMessage().contains("not accessible for deletion")) {
+                            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
+                        }
+                        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+                    }
+                })
+                .onErrorResume(e -> {
+                    logger.error("Controller error during file deletion for file ID {} and user {}: {}", fileId, userEmail, e.getMessage(), e);
+                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(new DeleteResponse(
+                            false, "An unexpected error occurred during file deletion: " + e.getMessage(),
+                            fileId, 0L, 0.0, 0.0)));
+                });
     }
 }

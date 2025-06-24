@@ -131,7 +131,7 @@ public class FirebaseAuthService {
                                         user.getUsername(),
                                         user.getImageUrl(),
                                         user.getAuthProvider().name(),
-                                        // CORRECTED: Removed != null check as getCurrentDriveUsageBytes() returns primitive long
+                                        user.getDriveFolderId(), // This should be before currentStorageUsageMb, // This is the issue
                                         user.getCurrentDriveUsageBytes() / (1024.0 * 1024.0)
                                 );
                             });

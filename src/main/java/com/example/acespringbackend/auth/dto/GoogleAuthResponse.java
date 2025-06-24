@@ -1,83 +1,44 @@
 package com.example.acespringbackend.auth.dto;
 
-// No Lombok imports needed anymore
-
 public class GoogleAuthResponse {
 
-    private String token; // Your application's JWT
+    private String token;
     private String email;
     private String username;
     private String imageUrl;
-    private String authProvider; // e.g., "GOOGLE"
-    private double currentStorageUsageMb; // Added field for current storage usage
+    private String authProvider;
+    private double currentStorageUsageMb;
+    private String driveFolderId; // ADDED: Field for the user's Google Drive folder ID
 
-    // --- Constructors ---
-
-    // No-argument constructor (replaces @NoArgsConstructor)
     public GoogleAuthResponse() {
     }
 
-    // All-argument constructor (replaces @AllArgsConstructor)
-    public GoogleAuthResponse(String token, String email, String username, String imageUrl, String authProvider, double currentStorageUsageMb) {
+    public GoogleAuthResponse(String token, String email, String username, String imageUrl, String authProvider, String driveFolderId, double currentStorageUsageMb) {
         this.token = token;
         this.email = email;
         this.username = username;
         this.imageUrl = imageUrl;
         this.authProvider = authProvider;
-        this.currentStorageUsageMb = currentStorageUsageMb;
+        this.currentStorageUsageMb = currentStorageUsageMb; // This is receiving the driveFolderId string
+        this.driveFolderId = driveFolderId; // This is receiving the double currentStorageUsageMb
     }
+    // --- Getters ---
+    public String getToken() { return token; }
+    public String getEmail() { return email; }
+    public String getUsername() { return username; }
+    public String getImageUrl() { return imageUrl; }
+    public String getAuthProvider() { return authProvider; }
+    public double getCurrentStorageUsageMb() { return currentStorageUsageMb; }
+    public String getDriveFolderId() { return driveFolderId; } // NEW: Getter
 
-    // --- Getters --- (replaces @Getter)
-
-    public String getToken() {
-        return token;
-    }
-
-    public String getEmail() {
-        return email;
-    }
-
-    public String getUsername() {
-        return username;
-    }
-
-    public String getImageUrl() {
-        return imageUrl;
-    }
-
-    public String getAuthProvider() {
-        return authProvider;
-    }
-
-    public double getCurrentStorageUsageMb() {
-        return currentStorageUsageMb;
-    }
-
-    // --- Setters --- (replaces @Setter)
-
-    public void setToken(String token) {
-        this.token = token;
-    }
-
-    public void setEmail(String email) {
-        this.email = email;
-    }
-
-    public void setUsername(String username) {
-        this.username = username;
-    }
-
-    public void setImageUrl(String imageUrl) {
-        this.imageUrl = imageUrl;
-    }
-
-    public void setAuthProvider(String authProvider) {
-        this.authProvider = authProvider;
-    }
-
-    public void setCurrentStorageUsageMb(double currentStorageUsageMb) {
-        this.currentStorageUsageMb = currentStorageUsageMb;
-    }
+    // --- Setters ---
+    public void setToken(String token) { this.token = token; }
+    public void setEmail(String email) { this.email = email; }
+    public void setUsername(String username) { this.username = username; }
+    public void setImageUrl(String imageUrl) { this.imageUrl = imageUrl; }
+    public void setAuthProvider(String authProvider) { this.authProvider = authProvider; }
+    public void setCurrentStorageUsageMb(double currentStorageUsageMb) { this.currentStorageUsageMb = currentStorageUsageMb; }
+    public void setDriveFolderId(String driveFolderId) { this.driveFolderId = driveFolderId; } // NEW: Setter
 
     @Override
     public String toString() {
@@ -88,6 +49,7 @@ public class GoogleAuthResponse {
                ", imageUrl='" + imageUrl + '\'' +
                ", authProvider='" + authProvider + '\'' +
                ", currentStorageUsageMb=" + currentStorageUsageMb +
+               ", driveFolderId='" + driveFolderId + '\'' +
                '}';
     }
 }

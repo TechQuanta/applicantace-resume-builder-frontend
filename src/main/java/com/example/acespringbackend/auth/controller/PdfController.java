@@ -97,7 +97,7 @@
 //        } catch (IOException | ServiceApiException | ServiceUsageException e) {
 //            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Error protecting PDF: " + e.getMessage(), e);
 //        }
-//    }
+//    
 //
 //    @PostMapping("/createFromHtml")
 //    public ResponseEntity<byte[]> createPdfFromHtml(@RequestParam("file") MultipartFile file) {
@@ -127,3 +127,120 @@
 //        }
 //    }
 //}
+package com.example.acespringbackend.auth.controller;
+
+import com.example.acespringbackend.auth.dto.FileProcessResponse;
+import com.example.acespringbackend.auth.dto.FileProcessRequest; // Use the renamed DTO
+import com.example.acespringbackend.service.AdobePdfService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.UrlResource;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+import reactor.core.publisher.Mono;
+
+import jakarta.validation.Valid; // For @Valid annotation
+
+import java.net.MalformedURLException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.io.File; // For java.io.File
+
+/**
+ * REST Controller for handling Adobe PDF Services related operations.
+ * Exposes endpoints for processing files from URLs and downloading processed files.
+ */
+@RestController
+@RequestMapping("/api/adobe")
+public class AdobeController {
+
+    private static final Logger log = LoggerFactory.getLogger(AdobeController.class);
+
+    private final AdobePdfService adobePdfService;
+
+    // Base directory for processed files (should match AdobePdfService temp path prefix)
+    private final Path processedFilesBaseDir = Paths.get(System.getProperty("java.io.tmpdir"), "adobe-processed");
+
+    public AdobeController(AdobePdfService adobePdfService) {
+        this.adobePdfService = adobePdfService;
+    }
+
+    /**
+     * Endpoint to trigger file processing via Adobe PDF Services by providing a file URL.
+     * The backend downloads the file, processes it, and provides a download link.
+     *
+     * @param request The FileProcessRequest containing the URL of the file to process.
+     * @return A Mono emitting an AdobeProcessResponse with details of the processed file.
+     */
+    @PostMapping("/process-from-url")
+    public Mono<ResponseEntity<AdobeProcessResponse>> processFileFromUrl(@Valid @RequestBody FileProcessRequest request) {
+        log.info("Received request to process file from URL: {}", request.getFileUrl());
+        return adobePdfService.processFileFromUrl(request)
+                .map(response -> {
+                    if (response.isSuccess()) {
+                        log.info("File processing successful. Download URL: {}", response.getDownloadUrl());
+                        return ResponseEntity.ok(response);
+                    } else {
+                        log.error("File processing failed: {}", response.getMessage());
+                        return ResponseEntity.badRequest().body(response);
+                    }
+                })
+                .onErrorResume(e -> {
+                    log.error("Unhandled error during file processing from URL: {}", e.getMessage(), e);
+                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                            .body(new AdobeProcessResponse(false, "Internal server error during processing: " + e.getMessage(), null, null)));
+                });
+    }
+
+    /**
+     * Endpoint to download a processed file.
+     * This endpoint serves files from the temporary 'adobe-processed' directory on the backend.
+     * In a production environment, you might store these in cloud storage (e.g., S3, Google Cloud Storage)
+     * and provide signed URLs instead of serving directly from the server.
+     *
+     * @param fileName The name of the file to download (e.g., "your_processed_file.pdf").
+     * @return A ResponseEntity containing the file as a Resource.
+     */
+    @GetMapping("/download/{fileName}")
+    public Mono<ResponseEntity<Resource>> downloadProcessedFile(@PathVariable String fileName) {
+        return Mono.fromCallable(() -> {
+            Path filePath = processedFilesBaseDir.resolve(fileName).normalize();
+            log.info("Attempting to serve file for download: {}", filePath);
+
+            if (!filePath.startsWith(processedFilesBaseDir)) {
+                // Security check: Prevent directory traversal attacks
+                log.warn("Attempted directory traversal detected for file: {}", fileName);
+                return ResponseEntity.badRequest().build();
+            }
+
+            try {
+                Resource resource = new UrlResource(filePath.toUri());
+                if (resource.exists() || resource.isReadable()) {
+                    String contentType = Files.probeContentType(filePath);
+                    if (contentType == null) {
+                        contentType = "application/octet-stream"; // Default content type
+                    }
+
+                    return ResponseEntity.ok()
+                            .contentType(MediaType.parseMediaType(contentType))
+                            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + resource.getFilename() + "\"")
+                            .body(resource);
+                } else {
+                    log.warn("File not found or not readable: {}", fileName);
+                    return ResponseEntity.notFound().build();
+                }
+            } catch (MalformedURLException e) {
+                log.error("Malformed URL for file {}: {}", fileName, e.getMessage(), e);
+                return ResponseEntity.badRequest().build();
+            } catch (IOException e) {
+                log.error("Error reading file {}: {}", fileName, e.getMessage(), e);
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+            }
+        }).subscribeOn(Schedulers.boundedElastic());
+    }
+}

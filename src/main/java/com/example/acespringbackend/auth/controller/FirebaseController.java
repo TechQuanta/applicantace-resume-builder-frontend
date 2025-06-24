@@ -48,8 +48,10 @@ public class FirebaseController {
                                     null, // email
                                     null, // username
                                     null, // imageUrl
+                                    null,
                                     "ERROR: " + e.getMessage(), // authProvider will contain the error message
-                                    0.0 // currentStorageUsageMb
+                                    0.0 // currentStorageUsageMb,
+                                   
                             )));
                 });
     }
@@ -73,6 +75,7 @@ public class FirebaseController {
                                     null, // email
                                     null, // username
                                     null, // imageUrl
+                                    null,
                                     "ERROR: " + e.getMessage(), // authProvider will contain the error message
                                     null, 0L // currentStorageUsageMb
                             )));
