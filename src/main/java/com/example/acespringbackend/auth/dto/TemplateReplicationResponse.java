@@ -11,7 +11,8 @@ public class TemplateReplicationResponse {
     private String newFileName;
     private String replicatedFileId; // The Google Drive ID of the newly copied file
     private String replicatedFileName; // The actual name of the file on Drive after replication
-    private String webViewLink; // The direct link to view the file in Google Docs/Drive
+    private String webViewLink; 
+    private String provider;// The direct link to view the file in Google Docs/Drive
     private double currentStorageUsageMb;
     private double maxStorageQuotaMb;
 
@@ -34,13 +35,14 @@ public class TemplateReplicationResponse {
      */
     public TemplateReplicationResponse(boolean success, String message, String newFileName, String replicatedFileId,
                                        String replicatedFileName, String webViewLink, double currentStorageUsageMb,
-                                       double maxStorageQuotaMb) {
+                                       double maxStorageQuotaMb,String provider) {
         this.success = success;
         this.message = message;
         this.newFileName = newFileName;
         this.replicatedFileId = replicatedFileId;
         this.replicatedFileName = replicatedFileName;
         this.webViewLink = webViewLink;
+        this.provider=provider;
         this.currentStorageUsageMb = currentStorageUsageMb;
         this.maxStorageQuotaMb = maxStorageQuotaMb;
     }
@@ -103,6 +105,9 @@ public class TemplateReplicationResponse {
         this.currentStorageUsageMb = currentStorageUsageMb;
     }
 
+    public String getProvider() {
+    	return provider;
+    }
     public double getMaxStorageQuotaMb() {
         return maxStorageQuotaMb;
     }

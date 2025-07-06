@@ -1526,15 +1526,20 @@ import com.example.acespringbackend.auth.dto.FileUploadResponse;
 import com.example.acespringbackend.model.UserFile;
 import com.example.acespringbackend.repository.UserFileRepository;
 import com.example.acespringbackend.utility.DriveUtility;
+import com.example.acespringbackend.utility.MimeTypeMap;
 import com.example.acespringbackend.auth.dto.FileDetail;
 import com.example.acespringbackend.auth.dto.DeleteResponse;
 import com.example.acespringbackend.auth.dto.FileListResponse;
 import com.example.acespringbackend.auth.dto.TemplateReplicationResponse;
-import com.example.acespringbackend.auth.dto.DownloadResult; // NEW: Import DownloadResult
-
+import com.example.acespringbackend.auth.dto.DownloadResult;
+import com.example.acespringbackend.auth.dto.FileRenameResponse;       // NEW
+import com.example.acespringbackend.auth.dto.PermissionUpdateResponse; // NEW
+import com.example.acespringbackend.auth.dto.TemplateReplicationRequest;
+import com.example.acespringbackend.auth.dto.FileExportResponse;      // NEW
+import com.google.api.client.googleapis.json.GoogleJsonResponseException;
 import com.google.api.services.drive.model.File;
 import com.google.api.services.drive.model.FileList;
-import com.google.api.services.drive.model.Permission;
+import jakarta.mail.MessagingException;
 
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
@@ -1552,6 +1557,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 
+
 /**
  * DriveService class handles the business logic related to user file management,
  * enforces quotas, and persists file metadata in the application's database.
@@ -1566,6 +1572,7 @@ public class DriveService {
     private final UserFileRepository userFileRepository;
     private final DriveUtility driveUtility;
     private final DriveProperties driveProperties;
+    private final EmailService emailService; // Declare the EmailService dependency
 
     /**
      * Constructor for DriveService, injecting necessary repositories, DriveUtility, and DriveProperties.
@@ -1575,12 +1582,15 @@ public class DriveService {
      * @param driveUtility The utility class for Google Drive operations.
      * @param driveProperties The configuration properties related to Google Drive.
      */
-    public DriveService(UserRepository userRepository, UserFileRepository userFileRepository, DriveUtility driveUtility, DriveProperties driveProperties) {
+    public DriveService(UserRepository userRepository, UserFileRepository userFileRepository, DriveUtility driveUtility, DriveProperties driveProperties,EmailService emailService) {
         this.userRepository = userRepository;
         this.userFileRepository = userFileRepository;
         this.driveUtility = driveUtility;
         this.driveProperties = driveProperties;
+        this.emailService = emailService; // Initialize it
     }
+    
+
 
     /**
      * Creates a user-specific folder and its standard subfolders (docs, images, tasks) in Google Drive
@@ -1791,98 +1801,143 @@ public class DriveService {
      * @param newFileName The desired name for the replicated file (e.g., "User's Resume - Template A").
      * @return A Mono emitting a TemplateReplicationResponse with details of the replicated file.
      */
-    public Mono<TemplateReplicationResponse> replicateTemplateFile(String userEmail, String masterTemplateFileId, String newFileName) {
+    public Mono<TemplateReplicationResponse> replicateTemplateFile(TemplateReplicationRequest request) {
+        String userEmail = request.getUserEmail();
+        String drive_id = request.getDrive_id(); // Master template ID
+        String newFileName = request.getNewFileName();
+        String targetDriveFolderId = request.getTargetDriveFolderId(); // User's specific folder ID from DTO
+
+        // New template metadata from the request
+        String templateName = request.getName();
+        String templateCategory = request.getCategory();
+        String templateImageUrl = request.getImage_url();
+        String templateDescription = request.getDescription(); // Corrected getter if DTO changed
+        String templateSpotlight = request.getSpotlight();
+        String requestTemplateProvider = request.getProvider(); // Get provider from request
+
+        // --- Set default template provider if not provided in the request ---
+        final String effectiveTemplateProvider = (requestTemplateProvider == null || requestTemplateProvider.isEmpty())
+                                                 ? "APPLICANTACE"
+                                                 : requestTemplateProvider;
+        // --- End of default provider logic ---
+
+
         return userRepository.findByEmail(userEmail)
                 .flatMap(user -> {
                     if (user == null) {
                         log.error("DriveService: User with email {} not found for template replication.", userEmail);
                         return Mono.just(new TemplateReplicationResponse(
-                                false, "User not found for template replication.", null, null, null, null, 0.0, 0.0));
+                                false, "User not found for template replication.", null, null, null, null, 0.0, 0.0, null));
                     }
 
-                    String userFolderId = user.getDriveFolderId();
+                    String userFolderId = targetDriveFolderId;
+
                     if (userFolderId == null || userFolderId.isEmpty()) {
-                        log.error("DriveService: User {} does not have a designated Drive folder ID. Cannot replicate template.", userEmail);
+                        log.error("DriveService: Target Drive folder ID is missing or invalid for user {}.", userEmail);
                         return Mono.just(new TemplateReplicationResponse(
-                                false, "User's Drive folder not found. Please ensure it's created.", null, null, null, null,
+                                false, "User's Drive folder not found or not provided. Cannot replicate template.", null, null, null, null,
                                 driveUtility.bytesToMegabytes(user.getCurrentDriveUsageBytes()),
-                                driveUtility.bytesToMegabytes(driveProperties.getMaxUserSpaceBytes())));
+                                driveUtility.bytesToMegabytes(driveProperties.getMaxUserSpaceBytes()), null));
                     }
 
                     long maxUserSpaceBytes = driveProperties.getMaxUserSpaceBytes();
 
                     return driveUtility.getDriveInstance().flatMap(driveInstance ->
-                            Mono.fromCallable(() -> {
-                                log.info("DriveService: Replicating template ID '{}' for user '{}' into folder '{}' with new name '{}'.",
-                                        masterTemplateFileId, userEmail, userFolderId, newFileName);
+                            Mono.fromCallable(() -> { // Schedulers.boundedElastic() will execute this blocking call
+                                log.info("DriveService: Replicating template ID '{}' (Name: {}) for user '{}' into folder '{}' with new name '{}'.",
+                                        drive_id, templateName, userEmail, userFolderId, newFileName);
+                                log.info("DriveService: Attempting to set templateProvider to: '{}' for file: '{}'.", effectiveTemplateProvider, newFileName);
+
 
                                 // 1. Copy the template file
-                                File copiedFile = driveUtility.copyFileToDrive(driveInstance, masterTemplateFileId, newFileName, userFolderId);
+                                File copiedFile = driveUtility.copyFileToDrive(driveInstance, drive_id, newFileName, userFolderId);
                                 if (copiedFile == null || copiedFile.getId() == null) {
                                     throw new IOException("Failed to copy template file to Google Drive.");
                                 }
                                 log.info("DriveService: Template '{}' replicated with new ID: {}", newFileName, copiedFile.getId());
 
                                 // 2. Set permissions for the user to be a writer on the new file
-                                // This is crucial to ensure they can edit it in the iframe.
-                                // We don't send a notification email as it's an internal replication.
                                 driveUtility.createPermission(driveInstance, copiedFile.getId(), userEmail, "writer", false);
                                 log.info("DriveService: Granted 'writer' permission to user '{}' for replicated file ID '{}'.", userEmail, copiedFile.getId());
 
-                                // 3. Store file metadata to application's database
+                                // 3. Store file metadata to application's database (MongoDB)
                                 UserFile userFile = new UserFile();
-                                userFile.setFilename(copiedFile.getName());
+                                userFile.setUserId(user.getId()); // Link to the user document
                                 userFile.setDriveFileId(copiedFile.getId());
-                                userFile.setUserId(user.getId());
-                                userFile.setUploadedAt(LocalDateTime.now());
+                                userFile.setFilename(copiedFile.getName());
+                                userFile.setMimeType(copiedFile.getMimeType()); // Assuming getMimeType is available
                                 userFile.setSize(copiedFile.getSize() != null ? copiedFile.getSize() : 0L);
-                                userFile.setContentType(copiedFile.getMimeType());
                                 userFile.setWebViewLink(copiedFile.getWebViewLink());
+                                userFile.setWebContentLink(copiedFile.getWebContentLink()); // Assuming Drive API provides this
+                                userFile.setUploadedAt(LocalDateTime.now());
+                                userFile.setLastModified(LocalDateTime.now()); // Set initial last modified time
 
+                                // Store the new template details
+                                userFile.setTemplateName(templateName);
+                                userFile.setTemplateCategory(templateCategory);
+                                userFile.setTemplateImageUrl(templateImageUrl);
+                                userFile.setTemplateDescription(templateDescription);
+                                userFile.setTemplateSpotlight(templateSpotlight);
+                                // --- THIS IS THE KEY CHANGE ---
+                                userFile.setTemplateProvider(effectiveTemplateProvider);
+                                // --- End of key change ---
+                                userFile.setOriginalTemplateDriveId(drive_id); // Store original template's ID
+
+                                // Update user's drive usage
                                 user.setCurrentDriveUsageBytes(user.getCurrentDriveUsageBytes() + userFile.getSize());
 
+                                log.info("DEBUG_PROVIDER: UserFile object before saving - filename: '{}', provider: '{}'", userFile.getFilename(), userFile.getTemplateProvider());
+
+
                                 return Mono.zip(
-                                        userRepository.save(user),
-                                        userFileRepository.save(userFile)
+                                        userRepository.save(user), // Save updated user with new usage
+                                        userFileRepository.save(userFile) // Save the new user file metadata
                                 ).map(tuple -> {
                                     User updatedUser = tuple.getT1();
+                                    UserFile savedUserFile = tuple.getT2(); // Capture the saved UserFile
                                     log.info("DriveService: Replicated file metadata and user usage updated for {}. New usage: {} bytes.",
                                             userEmail, updatedUser.getCurrentDriveUsageBytes());
+                                    log.info("DEBUG_PROVIDER: UserFile saved successfully to DB. ID: '{}', DriveFileId: '{}', Provider: '{}'",
+                                             savedUserFile.getId(), savedUserFile.getDriveFileId(), savedUserFile.getTemplateProvider());
+
 
                                     return new TemplateReplicationResponse(
                                             true,
                                             "Template replicated and permissioned successfully.",
-                                            newFileName,
-                                            copiedFile.getId(),
                                             copiedFile.getName(),
+                                            copiedFile.getId(),
+                                            copiedFile.getMimeType(),
                                             copiedFile.getWebViewLink(),
                                             driveUtility.bytesToMegabytes(updatedUser.getCurrentDriveUsageBytes()),
-                                            driveUtility.bytesToMegabytes(maxUserSpaceBytes)
+                                            driveUtility.bytesToMegabytes(maxUserSpaceBytes),
+                                            savedUserFile.getTemplateProvider() // Pass the actual provider from the saved object
                                     );
                                 }).onErrorResume(dbError -> {
                                     log.error("DriveService: CRITICAL: Template replicated and permissioned in Drive, but failed to save user/file metadata in DB for {}: {}. Drive File ID: {}",
                                             userEmail, dbError.getMessage(), copiedFile.getId(), dbError);
                                     return Mono.just(new TemplateReplicationResponse(
                                             false,
-                                            "Template replicated, but failed to update database records. Please contact support. Drive File ID: " + copiedFile.getId(),
-                                            newFileName,
-                                            copiedFile.getId(),
+                                            "Template replicated to Drive, but failed to update internal database records. Please contact support. Drive File ID: " + copiedFile.getId(),
                                             copiedFile.getName(),
+                                            copiedFile.getId(),
+                                            copiedFile.getMimeType(),
                                             copiedFile.getWebViewLink(),
                                             driveUtility.bytesToMegabytes(user.getCurrentDriveUsageBytes()),
-                                            driveUtility.bytesToMegabytes(maxUserSpaceBytes)
+                                            driveUtility.bytesToMegabytes(maxUserSpaceBytes),
+                                            effectiveTemplateProvider // Use the effective provider if DB save failed
                                     ));
                                 });
                             }).subscribeOn(Schedulers.boundedElastic())
                                     .flatMap(monoResponse -> monoResponse)
                                     .onErrorResume(Exception.class, e -> {
-                                        log.error("DriveService: Failed to replicate template ID '{}' for user {}: {}", masterTemplateFileId, userEmail, e.getMessage(), e);
+                                        log.error("DriveService: Failed to replicate template ID '{}' for user {}: {}", drive_id, userEmail, e.getMessage(), e);
                                         return Mono.just(new TemplateReplicationResponse(
                                                 false,
                                                 "Failed to replicate template from Google Drive: " + e.getMessage(),
                                                 newFileName, null, null, null,
                                                 driveUtility.bytesToMegabytes(user.getCurrentDriveUsageBytes()),
-                                                driveUtility.bytesToMegabytes(driveProperties.getMaxUserSpaceBytes())
+                                                driveUtility.bytesToMegabytes(maxUserSpaceBytes),
+                                                effectiveTemplateProvider
                                         ));
                                     })
                     );
@@ -1890,7 +1945,7 @@ public class DriveService {
                 .switchIfEmpty(Mono.defer(() -> {
                     log.error("DriveService: User with email {} not found for template replication (switchIfEmpty).", userEmail);
                     return Mono.just(new TemplateReplicationResponse(
-                            false, "User not found for template replication operation.", null, null, null, null, 0.0, 0.0));
+                            false, "User not found for template replication operation.", null, null, null, null, 0.0, 0.0, null));
                 }));
     }
 
@@ -1900,75 +1955,128 @@ public class DriveService {
      * details (like MongoDB ID if available) by querying the local database.
      *
      * @param email The email of the user whose files are to be listed.
+     * @param folderId 
      * @param folderId The Google Drive ID of the specific folder (e.g., user's "docs" folder ID).
      * @return A Mono emitting a FileListResponse containing the file details or an error message.
      */
-    public Mono<FileListResponse> getAllFileDetails(String email, String folderId) {
-        return userRepository.findByEmail(email)
-                .flatMap(user -> {
-                    long maxUserSpaceBytes = driveProperties.getMaxUserSpaceBytes();
+    public Mono<FileListResponse> getAllFileDetails(String email, String folderId) { // Removed folderId parameter from signature
+        log.info("DriveService: Method entry - getAllFileDetails for user email: '{}'.", email);
 
-                    if (user == null || user.getDriveFolderId() == null || user.getDriveFolderId().isEmpty()) {
-                        log.warn("DriveService: User {} or their root Drive folder ID not found. Cannot list files.", email);
+        // Step 1: Find the User by email. This returns a Mono<User>.
+        log.debug("DriveService: Attempting to find user by email: '{}' in UserRepository.", email);
+        return userRepository.findByEmail(email)
+                // Step 2: Use flatMap to process the User object (if found).
+                .flatMap(user -> {
+                    log.info("DriveService: User found: '{}'. User ID: '{}'.", user.getEmail(), user.getId());
+                    long maxUserSpaceBytes = driveProperties.getMaxUserSpaceBytes();
+                    log.debug("DriveService: Max user space bytes configured: {} MB ({} bytes).",
+                              driveUtility.bytesToMegabytes(maxUserSpaceBytes), maxUserSpaceBytes);
+
+                    if (user == null) {
+                        log.warn("DriveService: User object is null after findByEmail for '{}'. This should ideally not happen if flatMap is entered.", email);
                         return Mono.just(new FileListResponse(
-                                false, "User or user's Drive folder not found.",
+                                false, "User not found.",
                                 Collections.emptyList(), 0.0, driveUtility.bytesToMegabytes(maxUserSpaceBytes)));
                     }
 
-                    return driveUtility.getDriveInstance().flatMap(driveInstance ->
-                            Mono.fromCallable(() -> {
-                                log.info("DriveService: Attempting to list files for user '{}' in provided folder ID '{}'", email, folderId);
-                                try {
-                                    List<File> driveFiles = driveUtility.listFilesFromDrive(driveInstance, folderId);
+                    log.info("DriveService: Proceeding to fetch all UserFile records from MongoDB for user ID: '{}'.", user.getId());
 
-                                    List<UserFile> userFileRecords = userFileRepository.findByUserId(user.getId()).collectList().block();
-                                    Map<String, String> driveFileIdToMongoIdMap = userFileRecords.stream()
-                                            .collect(Collectors.toMap(UserFile::getDriveFileId, UserFile::getId));
+                    // Step 3: Retrieve all UserFile records for the user from MongoDB.
+                    // findByUserId returns Flux<UserFile>. collectList() turns it into Mono<List<UserFile>>.
+                    log.debug("DriveService: Calling userFileRepository.findByUserId({}) and collecting to list.", user.getId());
+                    return userFileRepository.findByUserId(user.getId())
+                            .collectList() // Converts Flux<UserFile> to Mono<List<UserFile>>
+                            // Step 4: Use flatMap again to process the List<UserFile>.
+                            .flatMap(userFiles -> {
+                                log.info("DriveService: Successfully retrieved {} UserFile records from MongoDB for user ID: '{}'.", userFiles.size(), user.getId());
+                                log.debug("DriveService: Starting transformation of UserFile records to FileDetail DTOs.");
+                                List<FileDetail> fileDetails = new ArrayList<>();
 
+                                for (UserFile userFile : userFiles) {
+                                    log.debug("DriveService: Processing UserFile - MongoDB ID: '{}', DriveFileId: '{}', Filename: '{}', MimeType: '{}', Size: {} bytes, Provider: '{}'.",
+                                              userFile.getId(), userFile.getDriveFileId(), userFile.getFilename(),
+                                              userFile.getMimeType(), userFile.getSize(), userFile.getTemplateProvider());
 
-                                    List<FileDetail> fileDetails = new ArrayList<>();
-                                    for (File driveFile : driveFiles) {
-                                        String uploadedAtString = null;
-                                        if (driveFile.getCreatedTime() != null) {
-                                            long milliseconds = driveFile.getCreatedTime().getValue();
-                                            uploadedAtString = LocalDateTime.ofInstant(Instant.ofEpochMilli(milliseconds), ZoneId.systemDefault()).toString();
-                                        }
-
-                                        String mongoId = driveFileIdToMongoIdMap.get(driveFile.getId());
-
-                                        fileDetails.add(new FileDetail(
-                                                mongoId,
-                                                driveFile.getId(),
-                                                driveFile.getName(),
-                                                driveFile.getMimeType(),
-                                                driveFile.getSize() != null ? driveFile.getSize() : 0L,
-                                                uploadedAtString,
-                                                driveFile.getWebViewLink(),
-                                                driveFile.getThumbnailLink()
-                                        ));
+                                    String uploadedAtString = null;
+                                    if (userFile.getUploadedAt() != null) {
+                                        // Assuming userFile.getUploadedAt() returns LocalDateTime
+                                        uploadedAtString = userFile.getUploadedAt().atZone(ZoneId.systemDefault()).toInstant().toString();
+                                        log.debug("DriveService: UserFile uploadedAt (LocalDateTime): '{}', Converted to String: '{}'.", userFile.getUploadedAt(), uploadedAtString);
+                                    } else {
+                                        log.debug("DriveService: UserFile uploadedAt is null for file '{}'.", userFile.getDriveFileId());
                                     }
-                                    log.info("DriveService: Found {} files for user {} in folder {}.", fileDetails.size(), email, folderId);
-                                    return new FileListResponse(true, "Files retrieved successfully.", fileDetails,
-                                            driveUtility.bytesToMegabytes(user.getCurrentDriveUsageBytes()),
-                                            driveUtility.bytesToMegabytes(maxUserSpaceBytes));
 
-                                } catch (Exception e) {
-                                    log.error("DriveService: Failed to list files for user {} in folder {}: {}", email, folderId, e.getMessage(), e);
-                                    throw e;
+                                    String embedLink = null;
+                                    String mimeType = userFile.getMimeType();
+                                    String webViewLink = userFile.getWebViewLink();
+
+                                    log.debug("DriveService: Determining embedLink for file '{}'. WebViewLink: '{}', MimeType: '{}'.", userFile.getFilename(), webViewLink, mimeType);
+                                    if (webViewLink != null) {
+                                        if (mimeType != null && mimeType.startsWith("application/vnd.google-apps.")) {
+                                            embedLink = webViewLink;
+                                            log.debug("DriveService: Google Workspace file ({}). Using webViewLink as embedLink: '{}'.", mimeType, embedLink);
+                                        } else {
+                                            embedLink = webViewLink
+                                                    .replace("/view?usp=drivesdk", "/preview")
+                                                    .replace("/view", "/preview");
+                                            log.debug("DriveService: Non-Google Workspace file ({}). Transformed webViewLink to embedLink: '{}'.", mimeType, embedLink);
+                                        }
+                                    } else {
+                                        log.warn("DriveService: No webViewLink found in MongoDB record for file ID: '{}'. Cannot generate embedLink for '{}'.", userFile.getDriveFileId(), userFile.getFilename());
+                                    }
+
+                                    FileDetail detail = new FileDetail(
+                                            userFile.getId(),             // MongoDB _id
+                                            userFile.getDriveFileId(),    // Google Drive File ID
+                                            userFile.getFilename(),
+                                            userFile.getMimeType(),
+                                            Objects.requireNonNullElse(userFile.getSize(), 0L),
+                                            uploadedAtString,
+                                            userFile.getWebViewLink(),
+                                            null,                         // Thumbnail link is not stored in UserFile, set to null
+                                            embedLink,
+                                            userFile.getTemplateProvider()
+                                    );
+                                    fileDetails.add(detail);
+                                    log.debug("DriveService: Added FileDetail for '{}'. Details: {}", userFile.getFilename(), detail.toString());
                                 }
-                            }).subscribeOn(Schedulers.boundedElastic())
-                    )
-                            .onErrorResume(Exception.class, e -> {
-                                return Mono.just(new FileListResponse(false, "Failed to retrieve files: " + e.getMessage(),
-                                        Collections.emptyList(), driveUtility.bytesToMegabytes(user.getCurrentDriveUsageBytes()),
-                                        driveUtility.bytesToMegabytes(maxUserSpaceBytes)));
-                            });
-                })
-                .switchIfEmpty(Mono.just(new FileListResponse(
-                        false, "User not found for file listing operation.",
-                        Collections.emptyList(), 0.0, driveUtility.bytesToMegabytes(driveProperties.getMaxUserSpaceBytes()))));
-    }
 
+                                log.info("DriveService: Finished transforming files. Total {} FileDetails prepared for response.", fileDetails.size());
+                                log.debug("DriveService: Current Drive Usage for user '{}': {} bytes ({} MB). Max Quota: {} MB.",
+                                          user.getEmail(), user.getCurrentDriveUsageBytes(),
+                                          driveUtility.bytesToMegabytes(user.getCurrentDriveUsageBytes()),
+                                          driveUtility.bytesToMegabytes(maxUserSpaceBytes));
+
+                                // Constructing the final FileListResponse
+                                FileListResponse response = new FileListResponse(
+                                        true, "Files retrieved successfully from MongoDB.", fileDetails,
+                                        driveUtility.bytesToMegabytes(user.getCurrentDriveUsageBytes()),
+                                        driveUtility.bytesToMegabytes(maxUserSpaceBytes));
+                                log.info("DriveService: Returning successful FileListResponse. Success: {}, Message: '{}', Files Count: {}.",
+                                         response.getSuccess(), response.getMessage(), response.getFiles().size());
+                                return Mono.just(response);
+                            })
+                            // Error handling for MongoDB retrieval (e.g., if DB is down or a critical error during processing)
+                            .onErrorResume(Exception.class, e -> {
+                                log.error("DriveService: CRITICAL ERROR - Failed to retrieve or process user files from MongoDB for user '{}': {}. Error type: {}. Stack Trace: ",
+                                          email, e.getMessage(), e.getClass().getSimpleName(), e); // Added e to print stack trace
+                                return Mono.just(new FileListResponse(false, "Failed to retrieve files from database: " + e.getMessage(),
+                                        Collections.emptyList(),
+                                        driveUtility.bytesToMegabytes(user.getCurrentDriveUsageBytes()),
+                                        driveUtility.bytesToMegabytes(maxUserSpaceBytes)));
+                            })
+                            // Ensure any potentially blocking operations within the lambda (like collectList().block() if used elsewhere, though not here)
+                            // are handled on a suitable scheduler.
+                            .subscribeOn(Schedulers.boundedElastic());
+                })
+                // Handle the case where userRepository.findByEmail(email) returns an empty Mono (user not found).
+                .switchIfEmpty(Mono.defer(() -> {
+                    log.error("DriveService: User with email {} not found by userRepository.findByEmail. Returning user not found response.", email);
+                    return Mono.just(new FileListResponse(
+                            false, "User not found for file listing operation.",
+                            Collections.emptyList(), 0.0, driveUtility.bytesToMegabytes(driveProperties.getMaxUserSpaceBytes())));
+                }));
+    }
     /**
      * Deletes a specific file from Google Drive and updates the user's storage quota
      * in the application's database. It performs checks to ensure the file belongs
@@ -2079,7 +2187,6 @@ public class DriveService {
                     return driveUtility.getDriveInstance().flatMap(driveInstance ->
                             Mono.fromCallable(() -> {
                                 log.info("DriveService: Attempting to download file ID '{}' for user '{}'.", fileId, email);
-                                // First, get file metadata to ensure it exists and get its name/mimeType
                                 File driveFile = driveUtility.getDriveFileMetadata(driveInstance, fileId, "name,mimeType,parents");
 
                                 if (driveFile == null) {
@@ -2087,7 +2194,6 @@ public class DriveService {
                                     throw new IOException("File not found on Google Drive.");
                                 }
 
-                                // Optional: Verify file belongs to the user's recognized folders
                                 String userRootFolderId = user.getDriveFolderId();
                                 List<String> userFolderAndSubfolderIds = new ArrayList<>();
                                 userFolderAndSubfolderIds.add(userRootFolderId);
@@ -2121,6 +2227,357 @@ public class DriveService {
                 .switchIfEmpty(Mono.defer(() -> {
                     log.error("DriveService: User with email {} not found for file download (switchIfEmpty).", email);
                     return Mono.just(new DownloadResult(false, "User not found for file download operation.", null, null, null));
+                }));
+    }
+
+    /**
+     * Renames a file in Google Drive and updates its metadata in the application's database.
+     *
+     * @param userEmail The email of the user who owns the file.
+     * @param fileId The Google Drive ID of the file to rename.
+     * @param newFileName The new name for the file.
+     * @return A Mono emitting a FileRenameResponse indicating success or failure.
+     */
+    public Mono<FileRenameResponse> renameFile(String userEmail, String fileId, String newFileName) {
+        return userRepository.findByEmail(userEmail)
+                .flatMap(user -> {
+                    long maxUserSpaceBytes = driveProperties.getMaxUserSpaceBytes();
+                    if (user == null) {
+                        log.warn("DriveService: User {} not found for file rename operation (ID: {}).", userEmail, fileId);
+                        return Mono.just(new FileRenameResponse(false, "User not found for file rename.", null, null, null, 0.0, 0.0));
+                    }
+
+                    return driveUtility.getDriveInstance().flatMap(driveInstance ->
+                            Mono.fromCallable(() -> {
+                                log.info("DriveService: Attempting to rename file ID '{}' to '{}' for user '{}'.", fileId, newFileName, userEmail);
+                                // Get metadata to verify ownership and existing name
+                                File driveFile = driveUtility.getDriveFileMetadata(driveInstance, fileId, "name,parents,webViewLink");
+
+                                if (driveFile == null) {
+                                    log.warn("DriveService: File with ID '{}' not found on Drive for user {}.", fileId, userEmail);
+                                    throw new IOException("File not found on Google Drive.");
+                                }
+
+                                // Verify file belongs to the user's recognized folders
+                                String userRootFolderId = user.getDriveFolderId();
+                                List<String> userFolderAndSubfolderIds = new ArrayList<>();
+                                userFolderAndSubfolderIds.add(userRootFolderId);
+                                String docsFolderId = driveUtility.getSubfolderId(driveInstance, userRootFolderId, "docs");
+                                if (docsFolderId != null) userFolderAndSubfolderIds.add(docsFolderId);
+                                String imagesFolderId = driveUtility.getSubfolderId(driveInstance, userRootFolderId, "images");
+                                if (imagesFolderId != null) userFolderAndSubfolderIds.add(imagesFolderId);
+                                String tasksFolderId = driveUtility.getSubfolderId(driveInstance, userRootFolderId, "tasks");
+                                if (tasksFolderId != null) userFolderAndSubfolderIds.add(tasksFolderId);
+
+                                boolean isFileInUserFolders = driveFile.getParents() != null &&
+                                        driveFile.getParents().stream().anyMatch(userFolderAndSubfolderIds::contains);
+
+                                if (!isFileInUserFolders) {
+                                    log.warn("DriveService: File ID '{}' is not within user {}'s recognized Drive folders. Rename aborted.", fileId, userEmail);
+                                    throw new IOException("File is not accessible for rename by this user or not in their designated space.");
+                                }
+
+                                // Perform rename using DriveUtility
+                                File renamedFile = driveUtility.renameDriveFile(driveInstance, fileId, newFileName);
+
+                                // Update DB record for UserFile
+                                return userFileRepository.findByDriveFileId(fileId)
+                                        .flatMap(userFile -> {
+                                            userFile.setFilename(renamedFile.getName());
+                                            userFile.setWebViewLink(renamedFile.getWebViewLink()); // Link might change if name is part of it
+                                            return userFileRepository.save(userFile);
+                                        })
+                                        .map(updatedUserFile -> {
+                                            log.info("DriveService: File ID '{}' renamed in DB for user {}.", fileId, userEmail);
+                                            return new FileRenameResponse(
+                                                    true,
+                                                    "File renamed successfully.",
+                                                    updatedUserFile.getFilename(),
+                                                    updatedUserFile.getDriveFileId(),
+                                                    updatedUserFile.getWebViewLink(),
+                                                    driveUtility.bytesToMegabytes(user.getCurrentDriveUsageBytes()),
+                                                    driveUtility.bytesToMegabytes(maxUserSpaceBytes)
+                                            );
+                                        })
+                                        .switchIfEmpty(Mono.error(new IOException("File metadata not found in database for update after Drive rename.")));
+                            }).subscribeOn(Schedulers.boundedElastic())
+                                    .flatMap(monoResponse -> monoResponse) // Flatten Mono<Mono<FileRenameResponse>>
+                                    .onErrorResume(Exception.class, e -> {
+                                        log.error("DriveService: Failed to rename file ID '{}' for user {}: {}", fileId, userEmail, e.getMessage(), e);
+                                        return Mono.just(new FileRenameResponse(
+                                                false,
+                                                "Failed to rename file: " + e.getMessage(),
+                                                null, fileId, null,
+                                                driveUtility.bytesToMegabytes(user.getCurrentDriveUsageBytes()),
+                                                driveUtility.bytesToMegabytes(maxUserSpaceBytes)
+                                        ));
+                                    })
+                    );
+                })
+                .switchIfEmpty(Mono.defer(() -> {
+                    log.error("DriveService: User with email {} not found for file rename operation (switchIfEmpty).", userEmail);
+                    return Mono.just(new FileRenameResponse(false, "User not found for file rename operation.", null, null, null, 0.0, 0.0));
+                }));
+    }
+
+    /**
+     * Updates permissions for a specific file in Google Drive.
+     * 
+     *
+     * @param userEmail The email of the user performing the action (must have sufficient permissions).
+     * @param fileId The Google Drive ID of the file to update permissions for.
+     * @param targetEmail The email of the user whose permission is being updated.
+     * @param role The new role to assign ("reader", "writer", "commenter").
+     * @param action 
+     * @return A Mono emitting a PermissionUpdateResponse indicating success or failure.
+     */
+    public Mono<PermissionUpdateResponse> updateFilePermission(String userEmail, String fileId, String targetEmail, String role, String action) {
+        return userRepository.findByEmail(userEmail)
+                .flatMap(user -> {
+                    // Check if the acting user exists
+                    if (user == null) {
+                        log.warn("DriveService: User {} not found for permission update operation.", userEmail);
+                        return Mono.just(new PermissionUpdateResponse(false, "User not found for permission update."));
+                    }
+
+                    // Get Google Drive instance and perform file operations
+                    return driveUtility.getDriveInstance().flatMap(driveInstance ->
+                            Mono.fromCallable(() -> { // Use Mono.fromCallable for blocking operations
+                                log.info("DriveService: Attempting to update permission for file ID '{}' for target '{}' with role '{}' by user '{}'.", fileId, targetEmail, role, userEmail);
+
+                                // 1. Verify the file exists and is accessible by the acting user
+                                File driveFile = driveUtility.getDriveFileMetadata(driveInstance, fileId, "name,parents");
+                                if (driveFile == null) {
+                                    log.warn("DriveService: File with ID '{}' not found on Drive for user {}.", fileId, userEmail);
+                                    throw new IOException("File not found on Google Drive.");
+                                }
+
+                                // 2. Verify file belongs to the acting user's recognized folders
+                                String userRootFolderId = user.getDriveFolderId();
+                                List<String> userFolderAndSubfolderIds = new ArrayList<>();
+                                userFolderAndSubfolderIds.add(userRootFolderId);
+                                String docsFolderId = driveUtility.getSubfolderId(driveInstance, userRootFolderId, "docs");
+                                if (docsFolderId != null) userFolderAndSubfolderIds.add(docsFolderId);
+                                String imagesFolderId = driveUtility.getSubfolderId(driveInstance, userRootFolderId, "images");
+                                if (imagesFolderId != null) userFolderAndSubfolderIds.add(imagesFolderId);
+                                String tasksFolderId = driveUtility.getSubfolderId(driveInstance, userRootFolderId, "tasks");
+                                if (tasksFolderId != null) userFolderAndSubfolderIds.add(tasksFolderId);
+
+                                boolean isFileInUserFolders = driveFile.getParents() != null &&
+                                        driveFile.getParents().stream().anyMatch(userFolderAndSubfolderIds::contains);
+
+                                if (!isFileInUserFolders) {
+                                    log.warn("DriveService: File ID '{}' is not within user {}'s recognized Drive folders. Permission update aborted.", fileId, userEmail);
+                                    throw new IOException("File is not accessible for permission update by this user.");
+                                }
+
+                                // 3. Get existing permission and prepare response messages
+                                String existingPermissionId = driveUtility.getPermissionIdForEmail(driveInstance, fileId, targetEmail);
+                                String fileName = driveFile.getName(); // Get file name for the email
+
+                                String successMessage;
+                                // Format role for email display (e.g., "reader" becomes "read")
+                                String formattedRole = role.equalsIgnoreCase("reader") ? "read" :
+                                        (role.equalsIgnoreCase("writer") ? "write" :
+                                                (role.equalsIgnoreCase("commenter") ? "comment" : role));
+
+                                // 4. Handle 'add' action
+                                if ("add".equalsIgnoreCase(action)) {
+                                    if (role == null || role.trim().isEmpty() || (!"reader".equalsIgnoreCase(role) && !"writer".equalsIgnoreCase(role) && !"commenter".equalsIgnoreCase(role))) {
+                                        throw new IllegalArgumentException("Invalid or missing role for adding permission. Role must be 'reader', 'writer', or 'commenter'.");
+                                    }
+                                    if (existingPermissionId != null) {
+                                        // Update existing permission if it already exists
+                                        driveUtility.updatePermission(driveInstance, fileId, existingPermissionId, role);
+                                        log.info("DriveService: Updated permission for file ID '{}', target '{}' to role '{}'.", fileId, targetEmail, role);
+                                        successMessage = String.format("Successfully updated '%s' access for user '%s'.", formattedRole, targetEmail);
+                                        try {
+                                            // Send email notification for updated permission
+                                            emailService.sendPermissionUpdateEmail(targetEmail, fileName, formattedRole, userEmail, "updated");
+                                        } catch (MessagingException e) {
+                                            // Log email sending failure, but do not fail the Drive operation
+                                            log.error("DriveService: Failed to send permission update email for file ID '{}', target '{}'. MessagingException: {}", fileId, targetEmail, e.getMessage(), e);
+                                        }
+                                    } else {
+                                        // Create new permission if none exists
+                                        driveUtility.createPermission(driveInstance, fileId, targetEmail, role, true); // true to send notification
+                                        log.info("DriveService: Created new permission for file ID '{}', target '{}' with role '{}'.", fileId, targetEmail, role);
+                                        successMessage = String.format("Successfully granted '%s' access to user '%s'.", formattedRole, targetEmail);
+                                        try {
+                                            // Send email notification for new permission
+                                            emailService.sendPermissionUpdateEmail(targetEmail, fileName, formattedRole, userEmail, "granted");
+                                        } catch (MessagingException e) {
+                                            log.error("DriveService: Failed to send permission granted email for file ID '{}', target '{}'. MessagingException: {}", fileId, targetEmail, e.getMessage(), e);
+                                        }
+                                    }
+                                }
+                                // 5. Handle 'remove' action
+                                else if ("remove".equalsIgnoreCase(action)) {
+                                    if (!"remove_all".equalsIgnoreCase(role)) {
+                                        throw new IllegalArgumentException("Invalid role '" + role + "' provided for 'remove' action. Expected 'remove_all'.");
+                                    }
+
+                                    if (existingPermissionId != null) {
+                                        // Delete permission if it exists
+                                        driveUtility.deletePermission(driveInstance, fileId, existingPermissionId);
+                                        log.info("DriveService: Removed permission for file ID '{}', target '{}'.", fileId, targetEmail);
+                                        successMessage = String.format("Successfully removed all permissions for user '%s'.", targetEmail);
+                                        try {
+                                            // Send email notification for removed permission
+                                            emailService.sendPermissionUpdateEmail(targetEmail, fileName, "removed", userEmail, "removed");
+                                        } catch (MessagingException e) {
+                                            log.error("DriveService: Failed to send permission removal email for file ID '{}', target '{}'. MessagingException: {}", fileId, targetEmail, e.getMessage(), e);
+                                        }
+                                    } else {
+                                        log.warn("DriveService: Attempted to remove permission for target '{}' on file ID '{}', but no existing direct permission was found.", targetEmail, fileId);
+                                        throw new IOException(String.format("User '%s' does not have direct permissions on this file to remove.", targetEmail));
+                                    }
+                                }
+                                // 6. Handle invalid action
+                                else {
+                                    throw new IllegalArgumentException("Invalid permission action: '" + action + "'. Must be 'add' or 'remove'.");
+                                }
+
+                                return new PermissionUpdateResponse(true, successMessage);
+                            }) // End of Mono.fromCallable lambda
+                            .subscribeOn(Schedulers.boundedElastic()) // Run blocking operations on a dedicated scheduler
+                            .onErrorResume(Exception.class, e -> {
+                                String errorMessage = "Failed to update file permission.";
+                                // Log the error with full stack trace for better diagnostics
+                                log.error("DriveService: Error during permission operation for file ID '{}' by user {}. Original Error: {}", fileId, userEmail, e.getMessage(), e);
+
+                                if (e instanceof GoogleJsonResponseException) {
+                                    GoogleJsonResponseException gjre = (GoogleJsonResponseException) e;
+                                    errorMessage = "Google Drive API error: " + gjre.getDetails().getMessage();
+                                    if (gjre.getStatusCode() == 404) {
+                                        errorMessage = "File not found or not accessible on Google Drive.";
+                                    } else if (gjre.getStatusCode() == 403) {
+                                        errorMessage = "Insufficient permissions to modify the file's sharing settings.";
+                                    }
+                                } else if (e instanceof IllegalArgumentException) {
+                                    // This block now catches the "Conversion = ';'" error with its original message
+                                    errorMessage = "Invalid request: " + e.getMessage();
+                                } else if (e instanceof IOException) {
+                                    errorMessage = "File access error: " + e.getMessage();
+                                } else if (e.getCause() instanceof MessagingException) { // Check if the underlying cause is MessagingException
+                                    errorMessage = "Email notification failed: " + e.getCause().getMessage();
+                                } else {
+                                    errorMessage = "An unexpected error occurred during the permission operation.";
+                                }
+                                return Mono.just(new PermissionUpdateResponse(false, errorMessage));
+                            })
+                    );
+                })
+                .switchIfEmpty(Mono.defer(() -> {
+                    log.error("DriveService: User with email {} not found for permission update operation (switchIfEmpty).", userEmail);
+                    return Mono.just(new PermissionUpdateResponse(false, "User not found for permission update operation."));
+                }));
+    }
+    /**
+     * Exports/converts a Google Drive native file (Docs, Sheets, Slides) to a specified MIME type.
+     * For non-native files, it simply returns the content as is if the MIME type matches or is a general download.
+     *
+     * @param userEmail The email of the user requesting the export.
+     * @param fileId The Google Drive ID of the file to export.
+     * @param exportMimeType The target MIME type for conversion (e.g., "application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document").
+     * @param newFileName An optional desired filename for the exported file.
+     * @return A Mono emitting a FileExportResponse with the exported file's content and metadata.
+     */
+    public Mono<FileExportResponse> exportFile(String userEmail, String fileId, String exportMimeType, String newFileName) {
+        return userRepository.findByEmail(userEmail)
+                .flatMap(user -> {
+                    long maxUserSpaceBytes = driveProperties.getMaxUserSpaceBytes();
+                    if (user == null) {
+                        log.error("DriveService: User with email {} not found for file export.", userEmail);
+                        return Mono.just(new FileExportResponse(false, "User not found.", null, null, null, 0.0, 0.0));
+                    }
+
+                    return driveUtility.getDriveInstance().flatMap(driveInstance ->
+                            Mono.fromCallable(() -> {
+                                log.info("DriveService: Attempting to export file ID '{}' to MIME type '{}' for user '{}'.", fileId, exportMimeType, userEmail);
+
+                                File driveFile = driveUtility.getDriveFileMetadata(driveInstance, fileId, "name,mimeType,parents");
+                                if (driveFile == null) {
+                                    log.warn("DriveService: File with ID '{}' not found on Drive for user {}.", fileId, userEmail);
+                                    throw new IOException("File not found on Google Drive.");
+                                }
+
+                                // Verify file belongs to the user's recognized folders
+                                String userRootFolderId = user.getDriveFolderId();
+                                List<String> userFolderAndSubfolderIds = new ArrayList<>();
+                                userFolderAndSubfolderIds.add(userRootFolderId);
+                                String docsFolderId = driveUtility.getSubfolderId(driveInstance, userRootFolderId, "docs");
+                                if (docsFolderId != null) userFolderAndSubfolderIds.add(docsFolderId);
+                                String imagesFolderId = driveUtility.getSubfolderId(driveInstance, userRootFolderId, "images");
+                                if (imagesFolderId != null) userFolderAndSubfolderIds.add(imagesFolderId);
+                                String tasksFolderId = driveUtility.getSubfolderId(driveInstance, userRootFolderId, "tasks");
+                                if (tasksFolderId != null) userFolderAndSubfolderIds.add(tasksFolderId);
+
+                                boolean isFileInUserFolders = driveFile.getParents() != null &&
+                                        driveFile.getParents().stream().anyMatch(userFolderAndSubfolderIds::contains);
+
+                                if (!isFileInUserFolders) {
+                                    log.warn("DriveService: File ID '{}' is not within user {}'s recognized Drive folders. Export aborted.", fileId, userEmail);
+                                    throw new IOException("File is not accessible for export by this user or not in their designated space.");
+                                }
+
+                                byte[] exportedContent;
+                                String finalFileName = (newFileName != null && !newFileName.isEmpty()) ? newFileName : driveFile.getName();
+                                String finalMimeType = exportMimeType;
+
+                                // Handle native Google Workspace files (Docs, Sheets, Slides) for export
+                                if (driveFile.getMimeType().startsWith("application/vnd.google-apps.")) {
+                                    log.info("DriveService: Exporting Google Workspace native file ID '{}' to '{}'.", fileId, exportMimeType);
+                                    exportedContent = ((DriveUtility) driveUtility).exportGoogleDriveFile(driveInstance, fileId, exportMimeType);
+                                    // Append correct extension to filename
+                                    if (finalFileName.lastIndexOf('.') > 0) {
+                                        finalFileName = finalFileName.substring(0, finalFileName.lastIndexOf('.'));
+                                    }
+                                    finalFileName += "." + MimeTypeMap.getDefaultExtensionFromMimeType(exportMimeType);
+
+                                } else {
+                                    // For non-native files, just download them
+                                    log.info("DriveService: Downloading non-native file ID '{}'. No conversion needed.", fileId);
+                                    exportedContent = driveUtility.downloadFileContent(driveInstance, fileId);
+                                    // Ensure the original mimeType is kept if not a conversion
+                                    finalMimeType = driveFile.getMimeType();
+                                    // Ensure filename has original extension
+                                    if (!finalFileName.contains(".") && driveFile.getName().contains(".")) {
+                                        finalFileName = driveFile.getName();
+                                    }
+                                }
+
+                                if (exportedContent == null || exportedContent.length == 0) {
+                                    throw new IOException("Exported file content is empty or conversion failed.");
+                                }
+
+                                return new FileExportResponse(
+                                        true,
+                                        "File exported successfully.",
+                                        finalFileName,
+                                        finalMimeType,
+                                        exportedContent,
+                                        driveUtility.bytesToMegabytes(user.getCurrentDriveUsageBytes()), // Usage not changed by export
+                                        driveUtility.bytesToMegabytes(maxUserSpaceBytes)
+                                );
+                            }).subscribeOn(Schedulers.boundedElastic())
+                    )
+                            .onErrorResume(Exception.class, e -> {
+                                log.error("DriveService: Failed to export file ID '{}' for user {}: {}", fileId, userEmail, e.getMessage(), e);
+                                String errorMessage = "Failed to export file: " + e.getMessage();
+                                if (e.getMessage().contains("Conversion not supported")) {
+                                    errorMessage = "File conversion to the requested format is not supported or possible.";
+                                } else if (e.getMessage().contains("File not found")) {
+                                    errorMessage = "File not found or not accessible.";
+                                }
+                                return Mono.just(new FileExportResponse(false, errorMessage, null, null, null,
+                                        driveUtility.bytesToMegabytes(user.getCurrentDriveUsageBytes()),
+                                        driveUtility.bytesToMegabytes(maxUserSpaceBytes)));
+                            });
+                })
+                .switchIfEmpty(Mono.defer(() -> {
+                    log.error("DriveService: User with email {} not found for file export operation (switchIfEmpty).", userEmail);
+                    return Mono.just(new FileExportResponse(false, "User not found for file export operation.", null, null, null, 0.0, 0.0));
                 }));
     }
 }
