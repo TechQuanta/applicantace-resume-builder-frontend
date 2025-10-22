@@ -49,4 +49,9 @@ public class MimeTypeMap {
     public static String getDefaultExtensionFromMimeType(String mimeType) {
         return MIME_TYPE_TO_EXTENSION.getOrDefault(mimeType, "bin"); // Default to binary if no specific extension
     }
+
+	public static boolean isGoogleAppsMimeType(String mimeType) {
+		// TODO Auto-generated method stub
+		return false;
+	}
 }

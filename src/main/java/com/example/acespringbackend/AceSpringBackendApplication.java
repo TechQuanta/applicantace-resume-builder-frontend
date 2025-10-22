@@ -1,16 +1,21 @@
-package com.example.acespringbackend; // Or wherever your main application class is
+package com.example.acespringbackend;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.data.mongodb.repository.ReactiveMongoRepository; // Make sure this is available
-import org.springframework.data.mongodb.repository.config.EnableReactiveMongoRepositories; // NEW IMPORT
+import org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration;
+import org.springframework.boot.autoconfigure.security.oauth2.client.servlet.OAuth2ClientAutoConfiguration;
+import org.springframework.boot.autoconfigure.security.oauth2.resource.servlet.OAuth2ResourceServerAutoConfiguration;
+import org.springframework.data.mongodb.repository.config.EnableReactiveMongoRepositories;
 
-@SpringBootApplication
-@EnableReactiveMongoRepositories(basePackages = "com.example.acespringbackend.repository") // IMPORTANT: Specify your repository package
+@SpringBootApplication(exclude = {
+    SecurityAutoConfiguration.class,
+    OAuth2ClientAutoConfiguration.class,
+    OAuth2ResourceServerAutoConfiguration.class
+})
+@EnableReactiveMongoRepositories(basePackages = "com.example.acespringbackend.repository")
 public class AceSpringBackendApplication {
 
     public static void main(String[] args) {
         SpringApplication.run(AceSpringBackendApplication.class, args);
     }
-
 }

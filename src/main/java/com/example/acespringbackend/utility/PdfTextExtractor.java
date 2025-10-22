@@ -2,8 +2,8 @@ package com.example.acespringbackend.utility;
 
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
-import org.springframework.web.multipart.MultipartFile;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.HashMap;
@@ -11,71 +11,83 @@ import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * Utility class for extracting text content from PDF documents.
+ * It provides methods to extract full text and to parse specific sections
+ * like 'experience' and 'skills' from the extracted text, typically from resumes.
+ */
 public class PdfTextExtractor {
 
     /**
-     * Extracts text from a PDF file.
+     * Extracts all text content from a given PDF byte array.
+     * This method is suitable for processing PDF files received as raw bytes,
+     * for example, from a web upload in a reactive environment.
      *
-     * @param file The MultipartFile representing the PDF.
-     * @return The extracted text.
-     * @throws IOException If there's an error reading the PDF.
+     * @param fileBytes The byte array representing the PDF file.
+     * @return A String containing all extracted text from the PDF.
+     * @throws IOException If an error occurs during PDF parsing or text extraction.
      */
-    public static String extractText(MultipartFile file) throws IOException {
-        try (InputStream inputStream = file.getInputStream(); PDDocument document = PDDocument.load(inputStream)) {
+    public static String extractText(byte[] fileBytes) throws IOException {
+        try (InputStream inputStream = new ByteArrayInputStream(fileBytes);
+             PDDocument document = PDDocument.load(inputStream)) {
             PDFTextStripper stripper = new PDFTextStripper();
             return stripper.getText(document);
         }
     }
 
     /**
-     * Extracts text from a PDF file twice and compares character counts to ensure proper extraction.
+     * Extracts text from a PDF byte array twice and performs a basic verification
+     * by comparing the lengths of the two extracted texts.
+     * If the lengths are very similar (difference less than 5 characters),
+     * it returns the first extracted text, indicating a reliable extraction.
+     * Otherwise, it returns an empty string, suggesting an unreliable extraction.
      *
-     * @param file The MultipartFile representing the PDF.
-     * @return The extracted text, or an empty string if extraction is unreliable.
-     * @throws IOException If there's an error reading the PDF.
+     * @param bytes The byte array representing the PDF file.
+     * @return The extracted text if deemed reliable, otherwise an empty string.
+     * @throws IOException If an error occurs during PDF parsing or text extraction.
      */
-    public static String extractTextTwiceAndVerify(MultipartFile file) throws IOException {
-        String text1 = extractText(file);
-        try (InputStream inputStream = file.getInputStream(); PDDocument document = PDDocument.load(inputStream)) {
-            PDFTextStripper stripper = new PDFTextStripper();
-            String text2 = stripper.getText(document);
+    public static String extractTextTwiceAndVerify(byte[] bytes) throws IOException {
+        String text1 = extractText(bytes);
+        // It's good practice to create a new InputStream for the second read,
+        // though extractText itself handles stream creation from bytes.
+        String text2 = extractText(bytes); // Re-use the extractText method with the same bytes
 
-            if (Math.abs(text1.length() - text2.length()) < 5) {
-                System.out.println("PDF extracted consistently. Length: " + text1.length());
-                return text1;
-            } else {
-                System.err.println("PDF extraction inconsistent. Length 1: " + text1.length() + ", Length 2: " + text2.length());
-                return "";
-            }
+        // Perform a simple length comparison for consistency check
+        if (Math.abs(text1.length() - text2.length()) < 5) {
+            return text1;
+        } else {
+            // Returning an empty string implies an issue with consistent extraction.
+            // Consider throwing a custom exception here for clearer error handling
+            // in calling services, e.g., throw new PdfExtractionException("PDF content extraction was inconsistent.");
+            return "";
         }
     }
 
     /**
-     * Extracts specific blocks (Experience, Skills) from the PDF text based on common headings.
-     * This is a heuristic approach and might not work perfectly for all resume formats.
-     * It attempts to capture content between a recognized heading and the next likely heading.
+     * Extracts specific content blocks (like 'experience' and 'skills') from a given full text,
+     * typically obtained from a resume PDF. It uses regular expressions to identify common section headings
+     * and capture the content under them.
      *
-     * @param fullText The full extracted text from the PDF.
-     * @return A Map containing extracted blocks, e.g., {"experience": "...", "skills": "..."}.
-     * Blocks not found will have empty strings as values.
+     * @param fullText The complete text extracted from a PDF.
+     * @return A Map where keys are block names ("experience", "skills") and values are the extracted content
+     * for those blocks. Returns empty strings for blocks not found.
      */
     public static Map<String, String> extractSpecificBlocks(String fullText) {
-        System.out.println("\n--- Full PDF Text Received by PdfTextExtractor.extractSpecificBlocks ---");
-        System.out.println("\"\"\"\n" + fullText + "\n\"\"\"");
-        System.out.println("-----------------------------------------------------------------------\n");
-
         Map<String, String> blocks = new HashMap<>();
+        // Initialize with empty strings to ensure keys are always present
         blocks.put("experience", "");
-        blocks.put("skills", ""); // Corrected to "skills" (plural)
+        blocks.put("skills", "");
 
+        // Normalize whitespace and newlines for consistent regex matching
         String normalizedText = fullText.replaceAll("\\s*\\n\\s*", " ").trim();
 
+        // Regex to identify common resume section headings (case-insensitive)
+        // This pattern uses a lookahead assertion to match content up to the next heading or end of string.
         String sectionHeadings = "(Objective|Summary|Experience|Work Experience|Professional Experience|Skills|Technical Skills|Core Competencies|Education|Projects|Certifications|Awards|Publications|Volunteer Experience|References)";
-
         Pattern blockPattern = Pattern.compile("(?i)\\b(" + sectionHeadings + ")\\b\\s*(.*?)(?=\\b" + sectionHeadings + "\\b|$)", Pattern.DOTALL);
-
         Matcher matcher = blockPattern.matcher(normalizedText);
 
+        // Temporarily store all found sections by their exact heading
         Map<String, String> tempBlocks = new HashMap<>();
         while (matcher.find()) {
             String heading = matcher.group(1);
@@ -83,6 +95,7 @@ public class PdfTextExtractor {
             tempBlocks.put(heading, content);
         }
 
+        // Map the extracted sections to the standardized "experience" and "skills" keys
         for (Map.Entry<String, String> entry : tempBlocks.entrySet()) {
             String heading = entry.getKey().toLowerCase();
             String content = entry.getValue();
@@ -93,11 +106,6 @@ public class PdfTextExtractor {
                 blocks.put("skills", content);
             }
         }
-
-        System.out.println("\n--- Extracted Resume Blocks (from PdfTextExtractor) ---");
-        System.out.println("Experience Block: \n\"\"\"\n" + blocks.get("experience") + "\n\"\"\"");
-        System.out.println("Skills Block: \n\"\"\"\n" + blocks.get("skills") + "\n\"\"\"");
-        System.out.println("-------------------------------------------------------\n");
 
         return blocks;
     }

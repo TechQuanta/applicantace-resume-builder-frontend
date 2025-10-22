@@ -1,162 +1,96 @@
-// src/main/java/com/example/acespringbackend/utility/JwtUtility.java
 package com.example.acespringbackend.utility;
 
 import io.jsonwebtoken.Claims;
-import io.jsonwebtoken.ExpiredJwtException;
-import io.jsonwebtoken.Jws;
-import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.SignatureAlgorithm;
-import io.jsonwebtoken.security.Keys; // Import Keys for secure key generation
+import io.jsonwebtoken.io.Decoders; // Make sure this import is present
+import io.jsonwebtoken.security.Keys;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Component;
 
 import java.security.Key;
 import java.util.Date;
-import java.time.Duration; // Import Duration for convenient expiration time
+import java.util.HashMap;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.concurrent.TimeUnit; // Import for TimeUnit
 
 @Component
 public class JwtUtility {
 
-    // IMPORTANT: In a production application, this secret key MUST be loaded securely
-    // from environment variables, a configuration server, or a secrets management system.
-    // NEVER hardcode it. It should be at least 256 bits (32 bytes) long.
-    // Keys.secretKeyFor(SignatureAlgorithm.HS256) generates a secure random key.
-    private static final Key SECRET_KEY = Keys.secretKeyFor(SignatureAlgorithm.HS256);
+    @Value("${application.security.jwt.secret-key}")
+    private String secretKey;
 
-    // Default expiration time for general tokens (e.g., login tokens)
-    private static final long DEFAULT_EXPIRATION_TIME_MILLIS = 1000 * 60 * 60 * 10; // 10 hours
+    // Token validity periods
+    private final long JWT_VALIDITY_7_DAYS = TimeUnit.DAYS.toMillis(7);     // 7 days expiration
+    private final long JWT_VALIDITY_30_MINUTES = TimeUnit.MINUTES.toMillis(30); // 30 minutes expiration
 
-    /**
-     * Generates a standard JWT token with a default expiration time.
-     * This is typically used for authentication after login.
-     *
-     * @param username The subject of the token (e.g., user's email).
-     * @return A new JWT string.
-     */
-    public String generateToken(String username) {
-        return Jwts.builder()
-                .setSubject(username) // Sets the principal subject of the token
-                .setIssuedAt(new Date(System.currentTimeMillis())) // Sets the issue date of the token
-                .setExpiration(new Date(System.currentTimeMillis() + DEFAULT_EXPIRATION_TIME_MILLIS)) // Sets token expiration
-                .signWith(SECRET_KEY, SignatureAlgorithm.HS256) // Signs the token with the secret key and algorithm
-                .compact(); // Builds and compacts the token to a string
+    // --- Token Generation Methods ---
+
+    public String generateToken7Days(String email) {
+        Map<String, Object> claims = new HashMap<>();
+        return createToken(claims, email, JWT_VALIDITY_7_DAYS);
     }
 
-    /**
-     * Generates a JWT token with a custom, specified expiration duration.
-     * This is ideal for time-sensitive operations like password reset links.
-     *
-     * @param username The subject of the token (e.g., user's email).
-     * @param expirationDuration The duration after which the token will expire.
-     * @return A new JWT string.
-     */
-    public String generateTokenWithExpiration(String username, Duration expirationDuration) {
+    public String generateToken30Minutes(String email) {
+        Map<String, Object> claims = new HashMap<>();
+        return createToken(claims, email, JWT_VALIDITY_30_MINUTES);
+    }
+
+    // --- Core Token Creation Logic (Reusable) ---
+
+    private String createToken(Map<String, Object> claims, String subject, long validityMillis) {
         return Jwts.builder()
-                .setSubject(username)
+                .setClaims(claims)
+                .setSubject(subject)
                 .setIssuedAt(new Date(System.currentTimeMillis()))
-                // Sets token expiration based on the provided Duration
-                .setExpiration(new Date(System.currentTimeMillis() + expirationDuration.toMillis()))
-                .signWith(SECRET_KEY, SignatureAlgorithm.HS256)
+                // Set the expiration date based on the provided validity
+                .setExpiration(new Date(System.currentTimeMillis() + validityMillis))
+                .signWith(getSignKey(), SignatureAlgorithm.HS256)
                 .compact();
     }
 
-    /**
-     * Extracts the username (subject) from the given JWT token.
-     *
-     * @param token The JWT string.
-     * @return The username contained in the token.
-     */
+    // --- Token Information Extraction Methods ---
+
     public String extractUsername(String token) {
-        return parseToken(token).getBody().getSubject();
+        return extractClaim(token, Claims::getSubject);
     }
 
-    /**
-     * Extracts the expiration date from the given JWT token.
-     *
-     * @param token The JWT string.
-     * @return The expiration Date of the token.
-     */
     public Date extractExpiration(String token) {
-        return parseToken(token).getBody().getExpiration();
+        return extractClaim(token, Claims::getExpiration);
     }
 
-    /**
-     * Validates a JWT token against a known username.
-     * This method is suitable for verifying tokens that belong to an already authenticated user.
-     * It first checks general token validity (signature, expiry) then verifies the username.
-     *
-     * @param token The JWT string to validate.
-     * @param username The expected username.
-     * @return True if the token is valid and belongs to the specified username, false otherwise.
-     */
-    public boolean validateToken(String token, String username) {
-        try {
-            // First, perform general token validation (signature and expiry)
-            if (!validateToken(token)) {
-                return false;
-            }
-            // Then, compare the extracted username with the provided one
-            String extractedUsername = extractUsername(token);
-            return extractedUsername.equals(username);
-        } catch (JwtException | IllegalArgumentException e) {
-            // Log any issues like malformed tokens, invalid signatures, etc.
-            System.err.println("Token validation error for username " + username + ": " + e.getMessage());
-            return false;
-        }
+    public <T> T extractClaim(String token, Function<Claims, T> claimsResolver) {
+        final Claims claims = extractAllClaims(token);
+        return claimsResolver.apply(claims);
     }
 
-    /**
-     * Validates the general integrity and expiration of a JWT token.
-     * This method checks if the token's signature is valid and if it has not expired.
-     * It does NOT check against a specific username, making it suitable for
-     * password reset tokens where the user identity is derived *from* the token.
-     *
-     * @param token The JWT string to validate.
-     * @return True if the token is valid (signed correctly and not expired), false otherwise.
-     */
-    public boolean validateToken(String token) {
-        try {
-            // Attempting to parse the token will automatically validate its signature and structure.
-            // If it's malformed or has an invalid signature, parseClaimsJws will throw an exception.
-            // We then explicitly check for expiration.
-            parseToken(token); // This line validates signature and structure
-            return !isTokenExpired(token); // Check if it's expired
-        } catch (ExpiredJwtException e) {
-            System.err.println("Token is expired: " + e.getMessage());
-            return false;
-        } catch (JwtException | IllegalArgumentException e) {
-            // Catches general JWT exceptions (e.g., malformed, bad signature)
-            System.err.println("General token validation failed (malformed/invalid signature): " + e.getMessage());
-            return false;
-        }
+    private Claims extractAllClaims(String token) {
+        return Jwts.parser()
+                .setSigningKey(getSignKey())
+                .build()
+                .parseClaimsJws(token)
+                .getBody();
     }
 
-    /**
-     * Checks if the given JWT token has expired.
-     *
-     * @param token The JWT string.
-     * @return True if the token's expiration date is before the current date, false otherwise.
-     */
-    private boolean isTokenExpired(String token) {
-        // Use the public extractExpiration method
-        Date expiration = extractExpiration(token);
+    // --- Token Validation Methods ---
+
+    private Boolean isTokenExpired(String token) {
+        final Date expiration = extractExpiration(token);
         return expiration.before(new Date());
     }
 
-    /**
-     * Parses the given JWT token and returns its claims.
-     * This is a private helper method used by other public methods.
-     * It also handles basic validation (signature, structure) internally.
-     *
-     * @param token The JWT string to parse.
-     * @return A Jws object containing the token's claims.
-     * @throws JwtException if the token is invalid (e.g., malformed, bad signature).
-     */
-    private Jws<Claims> parseToken(String token) {
-        // Using parserBuilder for newer jjwt versions
-        return Jwts.parser()
-                .setSigningKey(SECRET_KEY) // Set the key used for signing
-                .build()
-                .parseClaimsJws(token); // Parse and validate the token's claims
+    public Boolean validateToken(String token, UserDetails userDetails) {
+        final String username = extractUsername(token);
+        return (username.equals(userDetails.getUsername()) && !isTokenExpired(token));
+    }
+
+    // --- Helper Method for Signing Key ---
+
+    private Key getSignKey() {
+        // !!! FIX IS HERE: Use Base64URL decoder for the secret key !!!
+        byte[] keyBytes = Decoders.BASE64URL.decode(secretKey); // <--- CHANGED FROM Decoders.BASE64
+        return Keys.hmacShaKeyFor(keyBytes);
     }
 }

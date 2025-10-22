@@ -13,9 +13,7 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 
-import org.springframework.web.multipart.MultipartFile;
 import reactor.core.publisher.Mono;
-// import reactor.core.publisher.SynchronousSink; // No longer needed
 import reactor.util.retry.Retry;
 
 import java.io.IOException;
@@ -51,10 +49,11 @@ public class GeminiService {
         System.out.println("GeminiService initialized with " + this.apiKeys.size() + " API key(s).");
     }
 
-    public Mono<AtsResponse> getAtsScore(MultipartFile file, boolean isDeepCheck, String jobTitle, String jobDescription, String userEmail, String userId) {
+    // Changed MultipartFile to byte[]
+    public Mono<AtsResponse> getAtsScore(byte[] fileBytes, String originalFileName, boolean isDeepCheck, String jobTitle, String jobDescription, String userEmail, String userId) {
         String fullPdfText;
         try {
-            fullPdfText = PdfTextExtractor.extractText(file);
+            fullPdfText = PdfTextExtractor.extractText(fileBytes); // Use the byte[]
         } catch (IOException e) {
             return Mono.just(new AtsResponse("0", "", "", true, "Error extracting text from PDF: " + e.getMessage()));
         }
@@ -64,18 +63,13 @@ public class GeminiService {
         }
 
         final String finalFullPdfText = fullPdfText;
+        final String finalFileName = (originalFileName != null && !originalFileName.isEmpty()) ? originalFileName : "untitled_resume_" + System.currentTimeMillis() + ".pdf";
 
         List<Map<String, Object>> parts = buildGeminiPromptParts(isDeepCheck, jobTitle, jobDescription, finalFullPdfText);
 
         return callGemini(parts)
-                .flatMap(geminiMarkdownResponse -> { // This flatMap is separate and fine
+                .flatMap(geminiMarkdownResponse -> {
                     int atsScoreInt = extractScoreFromGeminiResponse(geminiMarkdownResponse);
-
-                    String originalFileName = file.getOriginalFilename();
-                    if (originalFileName == null || originalFileName.isEmpty()) {
-                        originalFileName = "untitled_resume_" + System.currentTimeMillis() + ".pdf";
-                    }
-                    final String finalFileName = originalFileName;
 
                     Mono<AtsResult> saveOrUpdateMono;
                     if (userEmail != null && !userEmail.isEmpty()) {
@@ -185,11 +179,7 @@ public class GeminiService {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
 
-        // --- Logging the request body (optional, be careful with sensitive data in production) ---
-        // You might want to use a proper JSON serializer for pretty printing,
-        // but for quick debugging, this will show the Map structure.
         System.out.println("Gemini Request Body: " + requestBody);
-        // Also log the actual prompt string that's being sent
         if (!contentParts.isEmpty() && contentParts.get(0).containsKey("text")) {
              String promptText = (String) contentParts.get(0).get("text");
              System.out.println("Gemini Prompt Content (first 500 chars): " + promptText.substring(0, Math.min(promptText.length(), 500)) + (promptText.length() > 500 ? "..." : ""));
@@ -211,14 +201,11 @@ public class GeminiService {
                         clientResponse.bodyToMono(String.class)
                                 .flatMap(errorBody -> {
                                     System.err.println("Gemini API HTTP error with key index " + currentApiKeyIndex.get() + ", Status: " + clientResponse.statusCode() + ", Body: " + errorBody);
-                                    // THIS IS THE CORRECTED LINE:
                                     return Mono.error(new RuntimeException("Gemini API call failed with status: " + clientResponse.statusCode() + " and body: " + errorBody));
                                 })
                     )
                     .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {})
-                    // Replaced handle with map for clearer type inference
                     .map(responseBody -> {
-                        // --- IMPORTANT: Log the full raw response body here ---
                         System.out.println("Gemini Raw Response Body: " + responseBody);
 
                         try {
@@ -238,7 +225,6 @@ public class GeminiService {
                                     }
                                 }
                             }
-                            // If no candidates or no text found, log specific issue
                             System.err.println("Gemini API response structure unexpected: No text content found or incorrect type. Response: " + responseBody);
                             throw new RuntimeException("Gemini API response structure unexpected: No text content found or incorrect type.");
                         } catch (ClassCastException e) {
@@ -256,7 +242,7 @@ public class GeminiService {
                             System.out.println("Attempt " + (retrySignal.totalRetriesInARow() + 1) + " failed. Retrying with next API key.");
                         })
                     )
-                    .onErrorResume(e -> { // This onErrorResume should now correctly infer Mono<String>
+                    .onErrorResume(e -> {
                         System.err.println("Gemini API error after trying all keys: " + e.getMessage());
                         e.printStackTrace();
                         return Mono.just("⚠️ Gemini API error after trying all keys: " + e.getMessage());

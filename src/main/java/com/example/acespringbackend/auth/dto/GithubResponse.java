@@ -1,24 +1,24 @@
 package com.example.acespringbackend.auth.dto;
 
-// No Lombok imports needed anymore
+import java.time.Instant; // Ensure this import is present
 
 public class GithubResponse {
 
     private String jwtToken; // Your application's JWT
+    private Instant expirationTime; // ADDED: Field for JWT expiration time
     private String email;
     private String username;
     private String imageUrl;
-    private String authProvider; // Will be "GITHUB" for this response, now initialized properly
+    private String authProvider; // Will be "GITHUB" for this response
     private String driveFolderId; // User's dedicated Google Drive folder ID
     private double currentStorageUsageMb; // Added field for current storage usage
 
     // --- Constructors ---
 
-
-
-    // All-argument constructor
-    public GithubResponse(String jwtToken, String email, String username, String imageUrl, String authProvider, String driveFolderId, Object object, double currentStorageUsageMb) {
+    // All-argument constructor (updated to include expirationTime and remove extraneous Object parameter)
+    public GithubResponse(String jwtToken, Instant expirationTime, String email, String username, String imageUrl, String authProvider, String driveFolderId, double currentStorageUsageMb) {
         this.jwtToken = jwtToken;
+        this.expirationTime = expirationTime; // Initialize new field
         this.email = email;
         this.username = username;
         this.imageUrl = imageUrl;
@@ -30,6 +30,7 @@ public class GithubResponse {
     // Private constructor for the Builder pattern
     private GithubResponse(Builder builder) {
         this.jwtToken = builder.jwtToken;
+        this.expirationTime = builder.expirationTime; // Initialize new field from builder
         this.email = builder.email;
         this.username = builder.username;
         this.imageUrl = builder.imageUrl;
@@ -42,6 +43,10 @@ public class GithubResponse {
 
     public String getJwtToken() {
         return jwtToken;
+    }
+
+    public Instant getExpirationTime() { // ADDED: Getter for expirationTime
+        return expirationTime;
     }
 
     public String getEmail() {
@@ -72,6 +77,10 @@ public class GithubResponse {
 
     public void setJwtToken(String jwtToken) {
         this.jwtToken = jwtToken;
+    }
+
+    public void setExpirationTime(Instant expirationTime) { // ADDED: Setter for expirationTime
+        this.expirationTime = expirationTime;
     }
 
     public void setEmail(String email) {
@@ -105,6 +114,7 @@ public class GithubResponse {
 
     public static class Builder {
         private String jwtToken;
+        private Instant expirationTime; // ADDED: Field in Builder
         private String email;
         private String username;
         private String imageUrl;
@@ -117,6 +127,11 @@ public class GithubResponse {
 
         public Builder jwtToken(String jwtToken) {
             this.jwtToken = jwtToken;
+            return this;
+        }
+
+        public Builder expirationTime(Instant expirationTime) { // ADDED: Builder method for expirationTime
+            this.expirationTime = expirationTime;
             return this;
         }
 
@@ -159,6 +174,7 @@ public class GithubResponse {
     public String toString() {
         return "GithubResponse{" +
                "jwtToken='" + "[PROTECTED]" + '\'' + // Mask token for security in toString
+               ", expirationTime=" + expirationTime + // Corrected toString formatting
                ", email='" + email + '\'' +
                ", username='" + username + '\'' +
                ", imageUrl='" + imageUrl + '\'' +

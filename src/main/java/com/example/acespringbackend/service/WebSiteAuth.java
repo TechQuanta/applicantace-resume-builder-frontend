@@ -1,6 +1,6 @@
 package com.example.acespringbackend.service;
 
-import com.example.acespringbackend.auth.dto.LoginRequest;
+import com.example.acespringbackend.auth.dto.*;
 import com.example.acespringbackend.auth.dto.LoginResponse;
 import com.example.acespringbackend.auth.dto.OtpVerificationRequest;
 import com.example.acespringbackend.auth.dto.SignUpRequest;
@@ -10,18 +10,23 @@ import com.example.acespringbackend.model.JwtExpiredToken;
 import com.example.acespringbackend.repository.UserRepository;
 import com.example.acespringbackend.repository.JwtExpiredTokenRepository;
 import com.example.acespringbackend.utility.JwtUtility;
+import com.example.acespringbackend.service.EmailService;
+import com.example.acespringbackend.service.DriveService;
+import com.example.acespringbackend.service.OTPStorageService;
 
 import jakarta.mail.MessagingException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
+import org.springframework.http.ResponseEntity;
 
 import java.time.LocalDateTime;
-import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import java.time.Instant;
-import java.time.Duration;
+import java.util.Date;
+import java.util.Optional;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,87 +41,102 @@ public class WebSiteAuth {
     private final UserRepository userRepository;
     private final DriveService driveService;
     private final PasswordEncoder passwordEncoder;
-    private final Map<String, String> otpStore = new ConcurrentHashMap<>();
     private final JwtUtility jwtUtility;
     private final JwtExpiredTokenRepository jwtExpiredTokenRepository;
-
-    private static final long RESET_TOKEN_VALIDITY_MINUTES = 20;
+    private final OTPStorageService otpStorageService;
 
     public WebSiteAuth(EmailService emailService,
                        UserRepository userRepository,
                        DriveService driveService,
                        PasswordEncoder passwordEncoder,
                        JwtUtility jwtUtility,
-                       JwtExpiredTokenRepository jwtExpiredTokenRepository) {
+                       JwtExpiredTokenRepository jwtExpiredTokenRepository,
+                       OTPStorageService otpStorageService) {
         this.emailService = emailService;
         this.userRepository = userRepository;
         this.driveService = driveService;
         this.passwordEncoder = passwordEncoder;
         this.jwtUtility = jwtUtility;
         this.jwtExpiredTokenRepository = jwtExpiredTokenRepository;
+        this.otpStorageService = otpStorageService;
     }
 
     private double bytesToMegabytes(long bytes) {
         return bytes / (1024.0 * 1024.0);
     }
 
+
     /**
-     * Sends an OTP for user registration. The driveFolderId and authProvider are not
-     * available at this initial step.
+     * Sends an OTP for user registration.
      * @param request SignUpRequest containing user email.
      * @return Mono of SignUpResponse indicating OTP sent status.
      */
     public Mono<SignUpResponse> sendOtpForSignup(SignUpRequest request) {
+        return userRepository.findByEmail(request.getEmail())
+                .flatMap(existingUser -> {
+                    if (existingUser != null && existingUser.getEmailVerified()) {
+                        log.warn("Attempted signup OTP for already verified user: {}", request.getEmail());
+                        return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "An account with this email already exists and is verified. Please try logging in."));
+                    }
+                    return sendOtpAndBuildResponse(request);
+                })
+                .switchIfEmpty(Mono.defer(() -> {
+                    return sendOtpAndBuildResponse(request);
+                }));
+    }
+
+    private Mono<SignUpResponse> sendOtpAndBuildResponse(SignUpRequest request) {
         String otp = generateOtp();
-        otpStore.put(request.getEmail(), otp);
+        otpStorageService.storeOtp(request.getEmail(), otp);
+        log.debug("OTP generated and stored for email: {}", request.getEmail());
 
         try {
             emailService.sendOtpEmail(request.getEmail(), otp);
+            log.info("OTP email successfully queued for sending to: {}", request.getEmail());
             return Mono.just(SignUpResponse.builder()
-                    .email(request.getEmail())
-                    .message("OTP sent to email")
+                    .email(request.getEmail()) // Email is already sent here
+                    .message("An OTP has been sent to your email. Please check your inbox and spam folder.")
                     .currentStorageUsageMb(0.0)
-                    .driveFolderId(null) // Drive folder ID not available at this step
-                    .authProvider(User.AuthProvider.WEBSITE.name()) // Assuming WEBSITE as auth provider
+                    .driveFolderId(null)
+                    .authProvider(User.AuthProvider.WEBSITE.name())
                     .build());
+        } catch (MessagingException e) {
+            log.error("Failed to send OTP email to {}: {}", request.getEmail(), e.getMessage(), e);
+            otpStorageService.removeOtp(request.getEmail());
+            return Mono.error(new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "We couldn't send the OTP. Please try again."));
         } catch (Exception e) {
-            log.error("Failed to send OTP email: {}", e.getMessage(), e);
-            return Mono.error(new RuntimeException("Failed to send OTP email: " + e.getMessage(), e));
+            log.error("An unexpected error occurred while sending OTP to {}: {}", request.getEmail(), e.getMessage(), e);
+            otpStorageService.removeOtp(request.getEmail());
+            return Mono.error(new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "An unexpected error occurred. Please try again."));
         }
     }
 
+
     /**
-     * Verifies the OTP provided by the user. Drive folder ID and authProvider are not
-     * fully established at this point.
+     * Verifies the OTP provided by the user.
      * @param request OtpVerificationRequest containing email and OTP.
      * @return Mono of SignUpResponse indicating OTP verification status.
      */
     public Mono<SignUpResponse> verifyOtpAndSignup(OtpVerificationRequest request) {
-        String savedOtp = otpStore.get(request.getEmail());
-        if (savedOtp != null && savedOtp.equals(request.getOtp())) {
-            otpStore.remove(request.getEmail());
+        if (otpStorageService.validateOtp(request.getEmail(), request.getOtp())) {
+            otpStorageService.removeOtp(request.getEmail()); // OTP consumed
+            log.info("OTP successfully verified for user: {}", request.getEmail());
             return Mono.just(SignUpResponse.builder()
-                    .email(request.getEmail())
-                    .message("OTP verified")
+                    .email(request.getEmail()) // Email is already sent here
+                    .message("OTP verified successfully. You can now complete your registration.")
                     .currentStorageUsageMb(0.0)
-                    .driveFolderId(null) // Drive folder ID not available at this step
-                    .authProvider(User.AuthProvider.WEBSITE.name()) // Assuming WEBSITE as auth provider
+                    .driveFolderId(null)
+                    .authProvider(User.AuthProvider.WEBSITE.name())
                     .build());
         } else {
-            return Mono.just(SignUpResponse.builder()
-                    .email(request.getEmail())
-                    .message("Invalid or expired OTP")
-                    .currentStorageUsageMb(0.0)
-                    .driveFolderId(null) // Drive folder ID not available at this step
-                    .authProvider(User.AuthProvider.WEBSITE.name()) // Assuming WEBSITE as auth provider
-                    .build());
+            log.warn("Invalid or expired OTP attempt for user: {}", request.getEmail());
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "The OTP is invalid or has expired. Please request a new one."));
         }
     }
 
     /**
      * Completes the user signup process after OTP verification. This involves
      * saving user details and creating a dedicated Google Drive folder for them.
-     * The driveFolderId and authProvider are fully populated here.
      *
      * @param request SignUpRequest containing full user details.
      * @return Mono of SignUpResponse with user details, JWT, and drive folder ID.
@@ -124,157 +144,127 @@ public class WebSiteAuth {
     public Mono<SignUpResponse> completeSignup(SignUpRequest request) {
         return userRepository.findByEmail(request.getEmail())
                 .flatMap(existingUser -> {
-                    if (existingUser != null && existingUser.getEmailVerified()) {
-                        log.warn("User already exists and is verified: {}", existingUser.getEmail());
-                        return Mono.just(SignUpResponse.builder()
-                                .email(existingUser.getEmail())
-                                .username(existingUser.getUsername())
-                                .linkedinUrl(existingUser.getLinkedinProfileUrl())
-                                .message("User already exists")
-                                .currentStorageUsageMb(bytesToMegabytes(existingUser.getCurrentDriveUsageBytes()))
-                                .driveFolderId(existingUser.getDriveFolderId()) // Include existing folder ID
-                                .authProvider(existingUser.getAuthProvider() != null ? existingUser.getAuthProvider().name() : null) // Include auth provider
-                                .build());
-                    } else if (existingUser != null && !existingUser.getEmailVerified()) {
-                        log.info("Updating unverified user for signup completion: {}", existingUser.getEmail());
-                        existingUser.setUsername(request.getUsername());
-                        existingUser.setPassword(passwordEncoder.encode(request.getPassword()));
-                        existingUser.setEmailVerified(true);
-                        existingUser.setLastLogin(LocalDateTime.now());
-                        existingUser.setAuthProvider(User.AuthProvider.WEBSITE); // Ensure auth provider is set
-
-                        if (request.getLinkedinProfileUrl() != null && !request.getLinkedinProfileUrl().isEmpty()) {
-                            existingUser.setLinkedinProfileUrl(request.getLinkedinProfileUrl());
-                        }
-
-                        return userRepository.save(existingUser)
-                                .flatMap(savedUser ->
-                                        driveService.createUserFolderIfNotExists(savedUser.getEmail())
-                                                .flatMap(folderId -> {
-                                                    savedUser.setDriveFolderId(folderId);
-                                                    savedUser.setCurrentDriveUsageBytes(0L); // Initialize if not already
-                                                    return userRepository.save(savedUser);
-                                                })
-                                                .map(finalSavedUser -> {
-                                                    String token = jwtUtility.generateToken(finalSavedUser.getEmail());
-                                                    return SignUpResponse.builder()
-                                                            .email(finalSavedUser.getEmail())
-                                                            .username(finalSavedUser.getUsername())
-                                                            .linkedinUrl(finalSavedUser.getLinkedinProfileUrl())
-                                                            .message("Signup successful")
-                                                            .token(token)
-                                                            .currentStorageUsageMb(bytesToMegabytes(finalSavedUser.getCurrentDriveUsageBytes()))
-                                                            .driveFolderId(finalSavedUser.getDriveFolderId()) // Include new folder ID
-                                                            .authProvider(finalSavedUser.getAuthProvider() != null ? finalSavedUser.getAuthProvider().name() : null) // Include auth provider
-                                                            .build();
-                                                })
-                                                .onErrorResume(driveEx -> {
-                                                    log.error("CRITICAL: Failed to create Drive folder for existing unverified user {}. Deleting user from DB.", savedUser.getEmail(), driveEx);
-                                                    return userRepository.delete(savedUser)
-                                                            .then(Mono.error(new RuntimeException("Signup failed: Could not create Drive folder for user.", driveEx)));
-                                                })
-                                );
+                    // Scenario 1: User exists and is already verified
+                    if (existingUser.getEmailVerified()) {
+                        log.warn("Attempted to complete signup for an already verified user: {}", existingUser.getEmail());
+                        return Mono.<SignUpResponse>error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "Your account is already verified. Please proceed to login."));
                     }
-                    return Mono.empty(); // Should not happen if previous checks are robust
+                    // Scenario 2: User exists but not verified (e.g., email initially existed, now completing signup)
+                    log.info("Updating unverified user details for signup completion: {}", existingUser.getEmail());
+                    return processUserRegistration(request, existingUser);
                 })
                 .switchIfEmpty(Mono.defer(() -> {
-                    // This block handles a truly new user (not just unverified existing)
+                    // Scenario 3: Truly new user (email not found at all, proceeds directly after OTP verification)
+                    log.info("Creating new user for signup completion: {}", request.getEmail());
                     User newUser = new User();
                     newUser.setId(UUID.randomUUID().toString()); // Generate a unique ID for new user
-                    newUser.setUsername(request.getUsername());
-                    newUser.setEmail(request.getEmail());
-                    newUser.setPassword(passwordEncoder.encode(request.getPassword()));
-                    newUser.setEmailVerified(true);
-                    newUser.setAuthProvider(User.AuthProvider.WEBSITE); // Explicitly set auth provider
-                    newUser.setCreatedAt(LocalDateTime.now());
-                    newUser.setLastLogin(LocalDateTime.now());
-                    newUser.setCurrentDriveUsageBytes(0L); // Initialize storage usage
-
-                    if (request.getLinkedinProfileUrl() != null && !request.getLinkedinProfileUrl().isEmpty()) {
-                        newUser.setLinkedinProfileUrl(request.getLinkedinProfileUrl());
-                    }
-
-                    return userRepository.save(newUser)
-                            .flatMap(savedUser ->
-                                    driveService.createUserFolderIfNotExists(savedUser.getEmail())
-                                            .flatMap(folderId -> {
-                                                savedUser.setDriveFolderId(folderId);
-                                                return userRepository.save(savedUser); // Save user with folder ID
-                                            })
-                                            .map(finalSavedUser -> {
-                                                String token = jwtUtility.generateToken(finalSavedUser.getEmail());
-                                                return SignUpResponse.builder()
-                                                        .email(finalSavedUser.getEmail())
-                                                        .username(finalSavedUser.getUsername())
-                                                        .linkedinUrl(finalSavedUser.getLinkedinProfileUrl())
-                                                        .message("Signup successful")
-                                                        .token(token)
-                                                        .currentStorageUsageMb(bytesToMegabytes(finalSavedUser.getCurrentDriveUsageBytes()))
-                                                        .driveFolderId(finalSavedUser.getDriveFolderId()) // Include new folder ID
-                                                        .authProvider(finalSavedUser.getAuthProvider() != null ? finalSavedUser.getAuthProvider().name() : null) // Include auth provider
-                                                        .build();
-                                            })
-                                            .onErrorResume(driveEx -> {
-                                                log.error("CRITICAL: Failed to create Drive folder for new user {}. Deleting user from DB.", savedUser.getEmail(), driveEx);
-                                                return userRepository.delete(savedUser)
-                                                        .then(Mono.error(new RuntimeException("Signup failed: Could not create Drive folder for user.", driveEx)));
-                                            })
-                            );
+                    newUser.setEmail(request.getEmail()); // Set email for the new user
+                    return processUserRegistration(request, newUser);
                 }));
     }
 
+    private Mono<SignUpResponse> processUserRegistration(SignUpRequest request, User userToSave) {
+        userToSave.setUsernameField(request.getUsername());
+        userToSave.setPassword(passwordEncoder.encode(request.getPassword()));
+        userToSave.setEmailVerified(true);
+        userToSave.setLastLogin(LocalDateTime.now());
+        userToSave.setAuthProvider(User.AuthProvider.WEBSITE);
+        userToSave.setCreatedAt(userToSave.getCreatedAt() != null ? userToSave.getCreatedAt() : LocalDateTime.now());
+
+        Optional.ofNullable(request.getLinkedinProfileUrl())
+                .filter(url -> !url.isEmpty())
+                .ifPresent(userToSave::setLinkedinProfileUrl);
+
+        return userRepository.save(userToSave)
+                .flatMap(savedUser ->
+                        driveService.createUserFolderIfNotExists(savedUser.getEmail())
+                                .flatMap(folderId -> {
+                                    savedUser.setDriveFolderId(folderId);
+                                    savedUser.setCurrentDriveUsageBytes(0L);
+                                    return userRepository.save(savedUser);
+                                })
+                                .map(finalSavedUser -> {
+                                    String token = jwtUtility.generateToken7Days(finalSavedUser.getEmail());
+                                    Date expirationDate = jwtUtility.extractExpiration(token);
+                                    Instant expirationInstant = (expirationDate != null) ? expirationDate.toInstant() : null;
+
+                                    log.info("Signup completed and drive folder created for: {}", finalSavedUser.getEmail());
+                                    return SignUpResponse.builder()
+                                            .email(finalSavedUser.getEmail()) // Email is already here
+                                            .username(finalSavedUser.getUsernameField())
+                                            .linkedinUrl(finalSavedUser.getLinkedinProfileUrl())
+                                            .message("Your account has been successfully created!")
+                                            .token(token)
+                                            .expirationTime(expirationInstant)
+                                            .currentStorageUsageMb(bytesToMegabytes(finalSavedUser.getCurrentDriveUsageBytes()))
+                                            .driveFolderId(finalSavedUser.getDriveFolderId())
+                                            .authProvider(finalSavedUser.getAuthProvider() != null ? finalSavedUser.getAuthProvider().name() : null)
+                                            .build();
+                                })
+                                .onErrorResume(driveEx -> {
+                                    log.error("CRITICAL: Failed to create Drive folder for user {} during signup. Deleting user from DB to prevent inconsistencies.", savedUser.getEmail(), driveEx);
+                                    return userRepository.delete(savedUser)
+                                            .then(Mono.error(new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "We couldn't set up your storage. Please try signing up again.")));
+                                })
+                )
+                .onErrorResume(e -> {
+                    log.error("An unexpected error occurred during user data persistence for {}: {}", request.getEmail(), e.getMessage(), e);
+                    return Mono.error(new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "An unexpected error occurred during registration. Please try again."));
+                });
+    }
+
     /**
-     * Handles user login for website-authenticated users. Populates the
-     * driveFolderId and authProvider in the LoginResponse.
+     * Handles user login for website-authenticated users.
      * @param request LoginRequest containing user credentials.
      * @return Mono of LoginResponse with JWT, user details, and drive folder ID.
      */
     public Mono<LoginResponse> login(LoginRequest request) {
         return userRepository.findByEmail(request.getEmail())
                 .flatMap(user -> {
-                    if (user == null || !passwordEncoder.matches(request.getPassword(), user.getPassword())) {
-                        log.warn("Login attempt failed for user {}: Invalid credentials.", request.getEmail());
-                        return Mono.just(LoginResponse.builder()
-                                .message("Invalid email or password")
-                                .driveFolderId(null) // Not available for failed login
-                                .authProvider(null) // Not available for failed login
-                                .build());
+                    if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
+                        log.warn("Login attempt failed for user {}: Invalid password.", request.getEmail());
+                        return Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid email or password."));
                     }
                     if (!user.getEmailVerified()) {
                         log.warn("Login attempt failed for user {}: Email not verified.", request.getEmail());
-                        return Mono.just(LoginResponse.builder()
-                                .message("Email not verified. Please complete signup process.")
-                                .driveFolderId(user.getDriveFolderId()) // Could be available if partially signed up
-                                .authProvider(user.getAuthProvider() != null ? user.getAuthProvider().name() : null) // Could be available
-                                .build());
+                        return Mono.error(new ResponseStatusException(HttpStatus.FORBIDDEN, "Your email is not verified. Please complete the signup process."));
                     }
-                    String token = jwtUtility.generateToken(user.getEmail());
-                    return Mono.just(LoginResponse.builder()
-                            .token(token)
-                            .username(user.getUsername())
-                            .message("Login successful")
-                            .currentStorageUsageMb(bytesToMegabytes(user.getCurrentDriveUsageBytes()))
-                            .driveFolderId(user.getDriveFolderId()) // Include folder ID on successful login
-                            .authProvider(user.getAuthProvider() != null ? user.getAuthProvider().name() : null) // Include auth provider on successful login
-                            .build());
+                    if (user.getAuthProvider() != User.AuthProvider.WEBSITE) {
+                        log.warn("Login attempt failed for user {}: Account not website-authenticated.", request.getEmail());
+                        return Mono.error(new ResponseStatusException(HttpStatus.FORBIDDEN, "This account was not registered with an email and password. Please use your original login method (e.g., Google, LinkedIn)."));
+                    }
+
+                    user.setLastLogin(LocalDateTime.now());
+                    return userRepository.save(user)
+                            .map(savedUser -> {
+                                String token = jwtUtility.generateToken7Days(savedUser.getEmail());
+                                Date expirationDate = jwtUtility.extractExpiration(token);
+                                Instant expirationInstant = (expirationDate != null) ? expirationDate.toInstant() : null;
+
+                                log.info("User logged in successfully: {}", savedUser.getEmail());
+                                return LoginResponse.builder()
+                                        .email(savedUser.getEmail()) // <--- ADDED THIS LINE!
+                                        .token(token)
+                                        .expirationTime(expirationInstant)
+                                        .username(savedUser.getUsernameField())
+                                        .message("Login successful!")
+                                        .currentStorageUsageMb(bytesToMegabytes(savedUser.getCurrentDriveUsageBytes()))
+                                        .driveFolderId(savedUser.getDriveFolderId())
+                                        .authProvider(savedUser.getAuthProvider() != null ? savedUser.getAuthProvider().name() : null)
+                                        .build();
+                            });
                 })
                 .switchIfEmpty(Mono.defer(() -> {
                     log.warn("Login attempt failed: User not found for email {}.", request.getEmail());
-                    return Mono.just(LoginResponse.builder()
-                            .message("User not found")
-                            .driveFolderId(null) // Not available
-                            .authProvider(null) // Not available
-                            .build());
+                    return Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid email or password."));
                 }))
+                .onErrorResume(ResponseStatusException.class, Mono::error)
                 .onErrorResume(e -> {
                     log.error("An unexpected error occurred during login for user {}: {}", request.getEmail(), e.getMessage(), e);
-                    return Mono.just(LoginResponse.builder()
-                            .message("An unexpected error occurred during login.")
-                            .driveFolderId(null) // Not available on unexpected error
-                            .authProvider(null) // Not available on unexpected error
-                            .build());
+                    return Mono.error(new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "An unexpected error occurred during login. Please try again."));
                 });
     }
+
 
     /**
      * Initiates the forgot password process by sending a reset link to the user's email.
@@ -282,92 +272,145 @@ public class WebSiteAuth {
      * This method is specifically for WEBSITE auth users.
      * @param email The email of the user requesting a password reset.
      * @param resetLinkBase The base URL for the password reset page.
-     * @return Mono<Void> indicating success or failure without a direct response body.
+     * @return Mono<ResponseEntity<String>> indicating success or failure with appropriate HTTP status.
      */
-    public Mono<Void> forgotPassword(String email, String resetLinkBase) {
+    public Mono<ResponseEntity<String>> forgotPassword(String email, String resetLinkBase) {
+        log.debug("Forgot password service initiated for email: {}", email);
         return userRepository.findByEmail(email)
-                // Ensure the user exists AND their authentication provider is WEBSITE
-                .filter(user -> user.getAuthProvider() == User.AuthProvider.WEBSITE)
-                .switchIfEmpty(Mono.error(new RuntimeException("User not found or not a website user. Password reset is only available for website accounts.")))
                 .flatMap(user -> {
-                    try {
-                        String resetToken = jwtUtility.generateTokenWithExpiration(user.getEmail(), Duration.ofMinutes(RESET_TOKEN_VALIDITY_MINUTES));
-
-                        JwtExpiredToken jwtTokenRecord = new JwtExpiredToken();
-                        jwtTokenRecord.setId(resetToken);
-                        jwtTokenRecord.setToken(resetToken);
-                        jwtTokenRecord.setExpirationTime(jwtUtility.extractExpiration(resetToken).toInstant());
-                        jwtTokenRecord.setUsed(false);
-                        jwtTokenRecord.setIssuedAt(Instant.now());
-
-                        return jwtExpiredTokenRepository.save(jwtTokenRecord)
-                                .flatMap(savedTokenRecord -> {
-                                    String resetLink = resetLinkBase + "?token=" + resetToken;
-                                    try {
-                                        emailService.sendPasswordResetEmail(user.getEmail(), resetLink);
-                                    } catch (MessagingException e) {
-                                        throw new RuntimeException(e);
-                                    }
-                                    log.info("Password reset link sent to {}", user.getEmail());
-                                    return Mono.empty();
-                                })
-                                .onErrorResume(dbEx -> {
-                                    log.error("Failed to save password reset token to DB for {}: {}", user.getEmail(), dbEx.getMessage(), dbEx);
-                                    return Mono.error(new RuntimeException("Failed to initiate password reset: Could not save token."));
-                                });
-
-                    } catch (Exception e) {
-                        log.error("Failed to send password reset email for {}: {}", user.getEmail(), e.getMessage(), e);
-                        return Mono.error(new RuntimeException("Failed to send password reset email: " + e.getMessage(), e));
+                    if (user.getAuthProvider() != User.AuthProvider.WEBSITE) {
+                        log.warn("Password reset requested for non-WEBSITE user: {}. Preventing email for security.", email);
+                        return Mono.just(ResponseEntity.status(HttpStatus.NOT_FOUND).body("We couldn't find an account associated with this email."));
                     }
-                }).then();
+
+                    String resetToken = jwtUtility.generateToken30Minutes(user.getEmail());
+                    Date expirationDate = jwtUtility.extractExpiration(resetToken);
+                    Instant tokenExpirationTime = (expirationDate != null) ? expirationDate.toInstant() : null;
+
+                    JwtExpiredToken jwtTokenRecord = new JwtExpiredToken();
+                    jwtTokenRecord.setToken(resetToken);
+                    jwtTokenRecord.setExpirationTime(tokenExpirationTime);
+                    jwtTokenRecord.setUsed(false);
+                    jwtTokenRecord.setIssuedAt(Instant.now());
+
+                    return jwtExpiredTokenRepository.save(jwtTokenRecord)
+                            .flatMap(savedTokenRecord -> {
+                                String fullResetLink = resetLinkBase + "/" + savedTokenRecord.getToken();
+                                log.info("Generated password reset link for {}.", user.getEmail());
+                                try {
+                                    emailService.sendPasswordResetEmail(user.getEmail(), fullResetLink);
+                                    log.info("Password reset link email sent to {}", user.getEmail());
+                                    // *** CHANGE START *** Return JSON for success
+                                    return Mono.just(ResponseEntity.ok("{\"status\": \"success\", \"message\": \"A password reset link has been sent to your email. Please check your inbox and spam folder.\"}"));
+                                    // *** CHANGE END ***
+                                } catch (MessagingException e) {
+                                    log.error("Failed to send password reset email to {}: {}", user.getEmail(), e.getMessage(), e);
+                                    // *** CHANGE START *** Return JSON for error
+                                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("{\"status\": \"error\", \"message\": \"We couldn't send the password reset email. Please try again.\"}"));
+                                    // *** CHANGE END ***
+                                }
+                            })
+                            .onErrorResume(dbEx -> {
+                                log.error("Failed to save password reset token to DB for {}: {}", user.getEmail(), dbEx.getMessage(), dbEx);
+                                // *** CHANGE START *** Return JSON for error
+                                return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("{\"status\": \"error\", \"message\": \"We encountered an issue initiating your password reset. Please try again.\"}"));
+                                // *** CHANGE END ***
+                            });
+                })
+                .switchIfEmpty(Mono.defer(() -> {
+                    log.info("Forgot password requested for non-existent email: {}", email);
+                    // *** CHANGE START *** Return JSON for not found
+                    return Mono.just(ResponseEntity.status(HttpStatus.NOT_FOUND).body("{\"status\": \"error\", \"message\": \"We couldn't find an account associated with this email.\"}"));
+                    // *** CHANGE END ***
+                }))
+                .onErrorResume(e -> {
+                    log.error("An unexpected error occurred during forgot password for email {}: {}", email, e.getMessage(), e);
+                    // *** CHANGE START *** Return JSON for unexpected error
+                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("{\"status\": \"error\", \"message\": \"An unexpected error occurred. Please try again.\"}"));
+                    // *** CHANGE END ***
+                });
     }
 
     /**
      * Resets the user's password using a valid, unused JWT token.
      * This method is specifically for WEBSITE auth users.
-     * @param token The JWT token string (for database lookup).
-     * @param email The email extracted from the token (already validated by caller).
+     * @param token The JWT token string.
      * @param newPassword The new password provided by the user.
-     * @return Mono<String> indicating success or failure.
+     * @return Mono<ResponseEntity<String>> indicating success or a detailed error message with appropriate HTTP status.
      */
-    public Mono<String> resetPassword(String token, String email, String newPassword) {
-        if (email == null || email.isEmpty()) {
-            log.warn("Email parameter is missing for password reset.");
-            return Mono.error(new RuntimeException("Invalid password reset request. Email missing."));
-        }
+    public Mono<ResponseEntity<String>> resetPassword(String token, String newPassword) {
+        log.debug("Reset password service initiated for token: {}", token);
 
-        return jwtExpiredTokenRepository.findByTokenAndUsed(token, false)
-                .switchIfEmpty(Mono.error(new RuntimeException("Password reset link is invalid, expired, or has already been used.")))
+        return jwtExpiredTokenRepository.findByToken(token)
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "The password reset link is invalid or has expired. Please request a new one.")))
                 .flatMap(tokenRecord -> {
-                    if (Instant.now().isAfter(tokenRecord.getExpirationTime())) {
-                        log.warn("Password reset token found in DB but is past its server-side expiration: {}", token);
-                        tokenRecord.setUsed(true);
-                        jwtExpiredTokenRepository.save(tokenRecord).subscribe();
-                        return Mono.error(new RuntimeException("Password reset link has expired."));
+                    if (tokenRecord.isUsed()) {
+                        log.warn("Attempt to use an already consumed password reset token: {}", token);
+                        return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "This password reset link has already been used. Please request a new one."));
                     }
 
-                    return userRepository.findByEmail(email)
-                            .filter(user -> user.getAuthProvider() == User.AuthProvider.WEBSITE)
-                            .switchIfEmpty(Mono.error(new RuntimeException("User not found or not a website user for password reset.")))
+                    String userEmail = jwtUtility.extractUsername(token);
+                    if (userEmail == null || userEmail.isEmpty()) {
+                        log.error("User email could not be extracted from JWT during password reset: {}", token);
+                        // IMPORTANT: Do NOT mark as used here. If the token is intrinsically malformed,
+                        // it was never valid in the first place, and marking it used would prevent retries if
+                        // there was an issue with the link itself. It should only be marked used on a successful password change.
+                        return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "The password reset link is invalid. Please request a new one."));
+                    }
+
+                    return userRepository.findByEmail(userEmail)
+                            .switchIfEmpty(Mono.defer(() -> {
+                                log.warn("User not found for email '{}' extracted from token {}. Not marking token as used.", userEmail, token);
+                                // IMPORTANT: Do NOT mark as used here. If the user doesn't exist, the link cannot complete,
+                                // but marking it used would imply it was successfully "consumed".
+                                return Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "The account associated with this reset link could not be found."));
+                            }))
                             .flatMap(user -> {
+                                // Important: JWT validity check should consider the actual JWT expiry too
+                                // even if the DB record hasn't caught up.
+                                if (!jwtUtility.validateToken(token, user)) {
+                                    log.warn("JWT token is intrinsically invalid or expired for user {}: {}", userEmail, token);
+                                    // IMPORTANT: Do NOT mark as used here. Intrinsic JWT invalidity means it's not a valid token to begin with.
+                                    return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "The password reset link has expired or is invalid. Please request a new one."));
+                                }
+
+                                if (Instant.now().isAfter(tokenRecord.getExpirationTime())) {
+                                    log.warn("Password reset token found in DB but is past its recorded expiration: {}", token);
+                                    // IMPORTANT: Do NOT mark as used here. It's truly expired.
+                                    return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "The password reset link has expired. Please request a new one."));
+                                }
+
+                                if (user.getAuthProvider() != User.AuthProvider.WEBSITE) {
+                                    log.warn("Password reset attempted for non-WEBSITE user through link: {}", userEmail);
+                                    // IMPORTANT: Do NOT mark as used here. This link is not for this auth type.
+                                    return Mono.error(new ResponseStatusException(HttpStatus.FORBIDDEN, "This reset link is not for accounts created with email and password. Please use your original login method."));
+                                }
+
                                 user.setPassword(passwordEncoder.encode(newPassword));
                                 user.setLastLogin(LocalDateTime.now());
 
                                 return userRepository.save(user)
                                         .flatMap(savedUser -> {
+                                            // *** CRITICAL CHANGE HERE: Mark token as used ONLY after successful password update ***
                                             tokenRecord.setUsed(true);
+                                            log.info("Password successfully reset for user: {}. Marking token as used.", savedUser.getEmail());
                                             return jwtExpiredTokenRepository.save(tokenRecord)
-                                                    .map(updatedRecord -> {
-                                                        log.info("Password successfully reset for user: {}", savedUser.getEmail());
-                                                        return "Password has been reset successfully.";
-                                                    });
+                                                    // *** CRITICAL CHANGE HERE: Return JSON response on success ***
+                                                    .thenReturn(ResponseEntity.ok("{\"status\": \"success\", \"message\": \"Your password has been successfully reset!\"}"));
                                         });
                             });
                 })
+                .onErrorResume(ResponseStatusException.class, e -> {
+                    log.error("Password reset failed for token {}: {}", token, e.getReason());
+                    // *** CHANGE START *** Ensure all error responses are JSON
+                    return Mono.just(ResponseEntity.status(e.getStatusCode()).body("{\"status\": \"error\", \"message\": \"" + e.getReason() + "\"}"));
+                    // *** CHANGE END ***
+                })
                 .onErrorResume(e -> {
-                    log.error("Error during password reset for token: {}. Error: {}", token, e.getMessage());
-                    return Mono.error(new RuntimeException("Failed to reset password: " + e.getMessage(), e));
+                    log.error("An unexpected error occurred during password reset for token {}: {}", token, e.getMessage(), e);
+                    // *** CHANGE START *** Ensure all error responses are JSON
+                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("{\"status\": \"error\", \"message\": \"An unexpected error occurred. Please try again.\"}"));
+                    // *** CHANGE END ***
                 });
     }
 

@@ -1,14 +1,20 @@
 package com.example.acespringbackend.model;
 
-// No Lombok imports needed anymore
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.userdetails.UserDetails;
 
 import java.time.LocalDateTime;
-import java.util.Objects; // Used for Objects.hash and Objects.equals in hashCode and equals
+import java.util.Collection;
+import java.util.Collections;
+import java.util.List;
+import java.util.Objects;
+import java.util.stream.Collectors;
 
 @Document(collection = "users")
-public class User {
+public class User implements UserDetails {
 
     @Id
     private String id;
@@ -18,16 +24,15 @@ public class User {
     private Boolean emailVerified;
     private String imageUrl;
 
-    private String accessToken;
-    private String firebaseIdToken;
+    private String accessToken; // Consider if these fields are truly necessary if you're using your own JWTs for primary auth
+    private String firebaseIdToken; // These might be for external IdP integration, which is fine
 
     private AuthProvider authProvider;
     private String signInProvider;
     private LocalDateTime createdAt;
-    private LocalDateTime lastLogin;
+    private LocalDateTime lastLogin; // Useful for tracking user activity, not JWT expiry
 
     private String driveFolderId;
-
     private String linkedinProfileUrl;
 
     // GitHub-specific fields
@@ -42,22 +47,25 @@ public class User {
     private Integer githubFollowers;
     private Integer githubFollowing;
 
-    // NEW: Field to store current drive usage in bytes
     private long currentDriveUsageBytes;
+    private List<String> roles;
+
+    // User account status fields (NOT token status)
+    private boolean enabled = true;
+    private boolean accountNonLocked = true;
+    private boolean credentialsNonExpired = true;
+    private boolean accountNonExpired = true;
 
     // --- Constructors ---
+    public User() {}
 
-    // No-argument constructor (replaces @NoArgsConstructor)
-    public User() {
-    }
-
-    // All-argument constructor (replaces @AllArgsConstructor)
     public User(String id, String username, String email, String password, Boolean emailVerified, String imageUrl,
                 String accessToken, String firebaseIdToken, AuthProvider authProvider, String signInProvider,
                 LocalDateTime createdAt, LocalDateTime lastLogin, String driveFolderId, String linkedinProfileUrl,
                 String githubId, String githubLogin, String githubHtmlUrl, String githubProfileUrl,
                 String githubCompany, String githubLocation, String githubBio, Integer githubPublicRepos,
-                Integer githubFollowers, Integer githubFollowing, long currentDriveUsageBytes) {
+                Integer githubFollowers, Integer githubFollowing, long currentDriveUsageBytes, List<String> roles,
+                boolean enabled, boolean accountNonLocked, boolean credentialsNonExpired, boolean accountNonExpired) {
         this.id = id;
         this.username = username;
         this.email = email;
@@ -83,251 +91,140 @@ public class User {
         this.githubFollowers = githubFollowers;
         this.githubFollowing = githubFollowing;
         this.currentDriveUsageBytes = currentDriveUsageBytes;
+        this.roles = roles;
+        this.enabled = enabled;
+        this.accountNonLocked = accountNonLocked;
+        this.credentialsNonExpired = credentialsNonExpired;
+        this.accountNonExpired = accountNonExpired;
     }
 
-    // --- Getters --- (replaces @Getter)
+    // --- Getters and Setters (omitted for brevity, assume they are present and correct as before) ---
+    // Make sure you have getters/setters for all fields, especially 'email' and 'password' for UserDetails.
 
-    public String getId() {
-        return id;
-    }
+    public String getId() { return id; }
+    public void setId(String id) { this.id = id; }
+    public String getUsernameField() { return username; } // Renamed to avoid clash with UserDetails.getUsername()
+    public void setUsernameField(String username) { this.username = username; }
+    public String getEmail() { return email; }
+    public void setEmail(String email) { this.email = email; }
+    @Override
+    public String getPassword() { return password; } // UserDetails method
+    public void setPassword(String password) { this.password = password; }
+    public Boolean getEmailVerified() { return emailVerified; }
+    public void setEmailVerified(Boolean emailVerified) { this.emailVerified = emailVerified; }
+    public String getImageUrl() { return imageUrl; }
+    public void setImageUrl(String imageUrl) { this.imageUrl = imageUrl; }
+    public String getAccessToken() { return accessToken; }
+    public void setAccessToken(String accessToken) { this.accessToken = accessToken; }
+    public String getFirebaseIdToken() { return firebaseIdToken; }
+    public void setFirebaseIdToken(String firebaseIdToken) { this.firebaseIdToken = firebaseIdToken; }
+    public AuthProvider getAuthProvider() { return authProvider; }
+    public void setAuthProvider(AuthProvider authProvider) { this.authProvider = authProvider; }
+    public String getSignInProvider() { return signInProvider; }
+    public void setSignInProvider(String signInProvider) { this.signInProvider = signInProvider; }
+    public LocalDateTime getCreatedAt() { return createdAt; }
+    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
+    public LocalDateTime getLastLogin() { return lastLogin; }
+    public void setLastLogin(LocalDateTime lastLogin) { this.lastLogin = lastLogin; }
+    public String getDriveFolderId() { return driveFolderId; }
+    public void setDriveFolderId(String driveFolderId) { this.driveFolderId = driveFolderId; }
+    public String getLinkedinProfileUrl() { return linkedinProfileUrl; }
+    public void setLinkedinProfileUrl(String linkedinProfileUrl) { this.linkedinProfileUrl = linkedinProfileUrl; }
+    public String getGithubId() { return githubId; }
+    public void setGithubId(String githubId) { this.githubId = githubId; }
+    public String getGithubLogin() { return githubLogin; }
+    public void setGithubLogin(String githubLogin) { this.githubLogin = githubLogin; }
+    public String getGithubHtmlUrl() { return githubHtmlUrl; }
+    public void setGithubHtmlUrl(String githubHtmlUrl) { this.githubHtmlUrl = githubHtmlUrl; }
+    public String getGithubProfileUrl() { return githubProfileUrl; }
+    public void setGithubProfileUrl(String githubProfileUrl) { this.githubProfileUrl = githubProfileUrl; }
+    public String getGithubCompany() { return githubCompany; }
+    public void setGithubCompany(String githubCompany) { this.githubCompany = githubCompany; }
+    public String getGithubLocation() { return githubLocation; }
+    public void setGithubLocation(String githubLocation) { this.githubLocation = githubLocation; }
+    public String getGithubBio() { return githubBio; }
+    public void setGithubBio(String githubBio) { this.githubBio = githubBio; }
+    public Integer getGithubPublicRepos() { return githubPublicRepos; }
+    public void setGithubPublicRepos(Integer githubPublicRepos) { this.githubPublicRepos = githubPublicRepos; }
+    public Integer getGithubFollowers() { return githubFollowers; }
+    public void setGithubFollowers(Integer githubFollowers) { this.githubFollowers = githubFollowers; }
+    public Integer getGithubFollowing() { return githubFollowing; }
+    public void setGithubFollowing(Integer githubFollowing) { this.githubFollowing = githubFollowing; }
+    public long getCurrentDriveUsageBytes() { return currentDriveUsageBytes; }
+    public void setCurrentDriveUsageBytes(long currentDriveUsageBytes) { this.currentDriveUsageBytes = currentDriveUsageBytes; }
+    public List<String> getRoles() { return roles; }
+    public void setRoles(List<String> roles) { this.roles = roles; }
+    public void setEnabled(boolean enabled) { this.enabled = enabled; }
+    public void setAccountNonLocked(boolean accountNonLocked) { this.accountNonLocked = accountNonLocked; }
+    public void setCredentialsNonExpired(boolean credentialsNonExpired) { this.credentialsNonExpired = credentialsNonExpired; }
+    public void setAccountNonExpired(boolean accountNonExpired) { this.accountNonExpired = accountNonExpired; }
 
-    public String getUsername() {
-        return username;
-    }
-
-    public String getEmail() {
-        return email;
-    }
-
-    public String getPassword() {
-        return password;
-    }
-
-    public Boolean getEmailVerified() {
-        return emailVerified;
-    }
-
-    public String getImageUrl() {
-        return imageUrl;
-    }
-
-    public String getAccessToken() {
-        return accessToken;
-    }
-
-    public String getFirebaseIdToken() {
-        return firebaseIdToken;
-    }
-
-    public AuthProvider getAuthProvider() {
-        return authProvider;
-    }
-
-    public String getSignInProvider() {
-        return signInProvider;
-    }
-
-    public LocalDateTime getCreatedAt() {
-        return createdAt;
-    }
-
-    public LocalDateTime getLastLogin() {
-        return lastLogin;
-    }
-
-    public String getDriveFolderId() {
-        return driveFolderId;
-    }
-
-    public String getLinkedinProfileUrl() {
-        return linkedinProfileUrl;
-    }
-
-    public String getGithubId() {
-        return githubId;
-    }
-
-    public String getGithubLogin() {
-        return githubLogin;
-    }
-
-    public String getGithubHtmlUrl() {
-        return githubHtmlUrl;
-    }
-
-    public String getGithubProfileUrl() {
-        return githubProfileUrl;
-    }
-
-    public String getGithubCompany() {
-        return githubCompany;
-    }
-
-    public String getGithubLocation() {
-        return githubLocation;
-    }
-
-    public String getGithubBio() {
-        return githubBio;
-    }
-
-    public Integer getGithubPublicRepos() {
-        return githubPublicRepos;
-    }
-
-    public Integer getGithubFollowers() {
-        return githubFollowers;
-    }
-
-    public Integer getGithubFollowing() {
-        return githubFollowing;
-    }
-
-    public long getCurrentDriveUsageBytes() {
-        return currentDriveUsageBytes;
-    }
-
-    // --- Setters --- (replaces @Setter)
-
-    public void setId(String id) {
-        this.id = id;
-    }
-
-    public void setUsername(String username) {
-        this.username = username;
-    }
-
-    public void setEmail(String email) {
-        this.email = email;
-    }
-
-    public void setPassword(String password) {
-        this.password = password;
-    }
-
-    public void setEmailVerified(Boolean emailVerified) {
-        this.emailVerified = emailVerified;
-    }
-
-    public void setImageUrl(String imageUrl) {
-        this.imageUrl = imageUrl;
-    }
-
-    public void setAccessToken(String accessToken) {
-        this.accessToken = accessToken;
-    }
-
-    public void setFirebaseIdToken(String firebaseIdToken) {
-        this.firebaseIdToken = firebaseIdToken;
-    }
-
-    public void setAuthProvider(AuthProvider authProvider) {
-        this.authProvider = authProvider;
-    }
-
-    public void setSignInProvider(String signInProvider) {
-        this.signInProvider = signInProvider;
-    }
-
-    public void setCreatedAt(LocalDateTime createdAt) {
-        this.createdAt = createdAt;
-    }
-
-    public void setLastLogin(LocalDateTime lastLogin) {
-        this.lastLogin = lastLogin;
-    }
-
-    public void setDriveFolderId(String driveFolderId) {
-        this.driveFolderId = driveFolderId;
-    }
-
-    public void setLinkedinProfileUrl(String linkedinProfileUrl) {
-        this.linkedinProfileUrl = linkedinProfileUrl;
-    }
-
-    public void setGithubId(String githubId) {
-        this.githubId = githubId;
-    }
-
-    public void setGithubLogin(String githubLogin) {
-        this.githubLogin = githubLogin;
-    }
-
-    public void setGithubHtmlUrl(String githubHtmlUrl) {
-        this.githubHtmlUrl = githubHtmlUrl;
-    }
-
-    public void setGithubProfileUrl(String githubProfileUrl) {
-        this.githubProfileUrl = githubProfileUrl;
-    }
-
-    public void setGithubCompany(String githubCompany) {
-        this.githubCompany = githubCompany;
-    }
-
-    public void setGithubLocation(String githubLocation) {
-        this.githubLocation = githubLocation;
-    }
-
-    public void setGithubBio(String githubBio) {
-        this.githubBio = githubBio;
-    }
-
-    public void setGithubPublicRepos(Integer githubPublicRepos) {
-        this.githubPublicRepos = githubPublicRepos;
-    }
-
-    public void setGithubFollowers(Integer githubFollowers) {
-        this.githubFollowers = githubFollowers;
-    }
-
-    public void setGithubFollowing(Integer githubFollowing) {
-        this.githubFollowing = githubFollowing;
-    }
-
-    public void setCurrentDriveUsageBytes(long currentDriveUsageBytes) {
-        this.currentDriveUsageBytes = currentDriveUsageBytes;
-    }
 
     // --- Enum Definition ---
     public enum AuthProvider {
-        GOOGLE,
-        GITHUB,
-        FIREBASE,
-        WEBSITE
+        GOOGLE, GITHUB, FIREBASE, WEBSITE
     }
 
-    // --- toString, equals, hashCode (for completeness, often generated by Lombok) ---
+    // --- UserDetails Interface Implementations ---
+    @Override
+    public Collection<? extends GrantedAuthority> getAuthorities() {
+        if (roles == null || roles.isEmpty()) {
+            return Collections.singletonList(new SimpleGrantedAuthority("ROLE_USER"));
+        }
+        return roles.stream()
+                .map(SimpleGrantedAuthority::new)
+                .collect(Collectors.toList());
+    }
 
+    @Override
+    public String getUsername() {
+        return this.email; // Spring Security uses this for the 'username' field
+    }
+
+    @Override
+    public boolean isAccountNonExpired() { return this.accountNonExpired; }
+    @Override
+    public boolean isAccountNonLocked() { return this.accountNonLocked; }
+    @Override
+    public boolean isCredentialsNonExpired() { return this.credentialsNonExpired; }
+    @Override
+    public boolean isEnabled() { return this.enabled; }
+
+    // --- toString, equals, hashCode (omitted for brevity, but ensure they cover all fields) ---
     @Override
     public String toString() {
         return "User{" +
-               "id='" + id + '\'' +
-               ", username='" + username + '\'' +
-               ", email='" + email + '\'' +
-               ", password='" + "[PROTECTED]" + '\'' + // Mask password
-               ", emailVerified=" + emailVerified +
-               ", imageUrl='" + imageUrl + '\'' +
-               ", accessToken='" + "[PROTECTED]" + '\'' + // Mask access token
-               ", firebaseIdToken='" + "[PROTECTED]" + '\'' + // Mask Firebase ID token
-               ", authProvider=" + authProvider +
-               ", signInProvider='" + signInProvider + '\'' +
-               ", createdAt=" + createdAt +
-               ", lastLogin=" + lastLogin +
-               ", driveFolderId='" + driveFolderId + '\'' +
-               ", linkedinProfileUrl='" + linkedinProfileUrl + '\'' +
-               ", githubId='" + githubId + '\'' +
-               ", githubLogin='" + githubLogin + '\'' +
-               ", githubHtmlUrl='" + githubHtmlUrl + '\'' +
-               ", githubProfileUrl='" + githubProfileUrl + '\'' +
-               ", githubCompany='" + githubCompany + '\'' +
-               ", githubLocation='" + githubLocation + '\'' +
-               ", githubBio='" + githubBio + '\'' +
-               ", githubPublicRepos=" + githubPublicRepos +
-               ", githubFollowers=" + githubFollowers +
-               ", githubFollowing=" + githubFollowing +
-               ", currentDriveUsageBytes=" + currentDriveUsageBytes +
-               '}';
+                "id='" + id + '\'' +
+                ", username='" + username + '\'' +
+                ", email='" + email + '\'' +
+                ", password='" + "[PROTECTED]" + '\'' +
+                ", emailVerified=" + emailVerified +
+                ", imageUrl='" + imageUrl + '\'' +
+                ", accessToken='" + "[PROTECTED]" + '\'' +
+                ", firebaseIdToken='" + "[PROTECTED]" + '\'' +
+                ", authProvider=" + authProvider +
+                ", signInProvider='" + signInProvider + '\'' +
+                ", createdAt=" + createdAt +
+                ", lastLogin=" + lastLogin +
+                ", driveFolderId='" + driveFolderId + '\'' +
+                ", linkedinProfileUrl='" + linkedinProfileUrl + '\'' +
+                ", githubId='" + githubId + '\'' +
+                ", githubLogin='" + githubLogin + '\'' +
+                ", githubHtmlUrl='" + githubHtmlUrl + '\'' +
+                ", githubProfileUrl='" + githubProfileUrl + '\'' +
+                ", githubCompany='" + githubCompany + '\'' +
+                ", githubLocation='" + githubLocation + '\'' +
+                ", githubBio='" + githubBio + '\'' +
+                ", githubPublicRepos=" + githubPublicRepos +
+                ", githubFollowers=" + githubFollowers +
+                ", githubFollowing=" + githubFollowing +
+                ", currentDriveUsageBytes=" + currentDriveUsageBytes +
+                ", roles=" + roles +
+                ", enabled=" + enabled +
+                ", accountNonLocked=" + accountNonLocked +
+                ", credentialsNonExpired=" + credentialsNonExpired +
+                ", accountNonExpired=" + accountNonExpired +
+                '}';
     }
 
     @Override
@@ -336,37 +233,43 @@ public class User {
         if (o == null || getClass() != o.getClass()) return false;
         User user = (User) o;
         return currentDriveUsageBytes == user.currentDriveUsageBytes &&
-               Objects.equals(id, user.id) &&
-               Objects.equals(username, user.username) &&
-               Objects.equals(email, user.email) &&
-               Objects.equals(password, user.password) &&
-               Objects.equals(emailVerified, user.emailVerified) &&
-               Objects.equals(imageUrl, user.imageUrl) &&
-               Objects.equals(accessToken, user.accessToken) &&
-               Objects.equals(firebaseIdToken, user.firebaseIdToken) &&
-               authProvider == user.authProvider &&
-               Objects.equals(signInProvider, user.signInProvider) &&
-               Objects.equals(createdAt, user.createdAt) &&
-               Objects.equals(lastLogin, user.lastLogin) &&
-               Objects.equals(driveFolderId, user.driveFolderId) &&
-               Objects.equals(linkedinProfileUrl, user.linkedinProfileUrl) &&
-               Objects.equals(githubId, user.githubId) &&
-               Objects.equals(githubLogin, user.githubLogin) &&
-               Objects.equals(githubHtmlUrl, user.githubHtmlUrl) &&
-               Objects.equals(githubProfileUrl, user.githubProfileUrl) &&
-               Objects.equals(githubCompany, user.githubCompany) &&
-               Objects.equals(githubLocation, user.githubLocation) &&
-               Objects.equals(githubBio, user.githubBio) &&
-               Objects.equals(githubPublicRepos, user.githubPublicRepos) &&
-               Objects.equals(githubFollowers, user.githubFollowers) &&
-               Objects.equals(githubFollowing, user.githubFollowing);
+                enabled == user.enabled &&
+                accountNonLocked == user.accountNonLocked &&
+                credentialsNonExpired == user.credentialsNonExpired &&
+                accountNonExpired == user.accountNonExpired &&
+                Objects.equals(id, user.id) &&
+                Objects.equals(username, user.username) &&
+                Objects.equals(email, user.email) &&
+                Objects.equals(password, user.password) &&
+                Objects.equals(emailVerified, user.emailVerified) &&
+                Objects.equals(imageUrl, user.imageUrl) &&
+                Objects.equals(accessToken, user.accessToken) &&
+                Objects.equals(firebaseIdToken, user.firebaseIdToken) &&
+                authProvider == user.authProvider &&
+                Objects.equals(signInProvider, user.signInProvider) &&
+                Objects.equals(createdAt, user.createdAt) &&
+                Objects.equals(lastLogin, user.lastLogin) &&
+                Objects.equals(driveFolderId, user.driveFolderId) &&
+                Objects.equals(linkedinProfileUrl, user.linkedinProfileUrl) &&
+                Objects.equals(githubId, user.githubId) &&
+                Objects.equals(githubLogin, user.githubLogin) &&
+                Objects.equals(githubHtmlUrl, user.githubHtmlUrl) &&
+                Objects.equals(githubProfileUrl, user.githubProfileUrl) &&
+                Objects.equals(githubCompany, user.githubCompany) &&
+                Objects.equals(githubLocation, user.githubLocation) &&
+                Objects.equals(githubBio, user.githubBio) &&
+                Objects.equals(githubPublicRepos, user.githubPublicRepos) &&
+                Objects.equals(githubFollowers, user.githubFollowers) &&
+                Objects.equals(githubFollowing, user.githubFollowing) &&
+                Objects.equals(roles, user.roles);
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(id, username, email, password, emailVerified, imageUrl, accessToken, firebaseIdToken,
-                            authProvider, signInProvider, createdAt, lastLogin, driveFolderId, linkedinProfileUrl,
-                            githubId, githubLogin, githubHtmlUrl, githubProfileUrl, githubCompany, githubLocation,
-                            githubBio, githubPublicRepos, githubFollowers, githubFollowing, currentDriveUsageBytes);
+                authProvider, signInProvider, createdAt, lastLogin, driveFolderId, linkedinProfileUrl,
+                githubId, githubLogin, githubHtmlUrl, githubProfileUrl, githubCompany, githubLocation,
+                githubBio, githubPublicRepos, githubFollowers, githubFollowing, currentDriveUsageBytes, roles,
+                enabled, accountNonLocked, credentialsNonExpired, accountNonExpired);
     }
 }

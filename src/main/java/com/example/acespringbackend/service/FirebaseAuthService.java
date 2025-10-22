@@ -12,6 +12,8 @@ import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
 import java.time.LocalDateTime;
+import java.time.Instant;
+import java.util.Date;
 
 @Service
 public class FirebaseAuthService {
@@ -28,6 +30,10 @@ public class FirebaseAuthService {
         this.driveService = driveService;
     }
 
+    private double bytesToMegabytes(long bytes) {
+        return bytes / (1024.0 * 1024.0);
+    }
+
     public Mono<GoogleAuthResponse> authenticate(GoogleAuthRequest request) {
         String idToken = request.getIdToken();
         if (idToken == null || idToken.isEmpty()) {
@@ -39,20 +45,20 @@ public class FirebaseAuthService {
                     String uid = firebaseToken.getUid();
                     String email = firebaseToken.getEmail();
                     boolean emailVerified = firebaseToken.isEmailVerified();
-                    String name = firebaseToken.getName();
+                    String name = firebaseToken.getName(); // This is Google's display name
                     String picture = firebaseToken.getPicture();
 
                     System.out.println("--- Firebase Token Details ---");
                     System.out.println("UID: " + uid);
                     System.out.println("Email: " + email + " (Verified: " + emailVerified + ")");
-                    System.out.println("Name: " + name);
+                    System.out.println("Name (from Firebase): " + name); // Log actual name from Firebase
                     System.out.println("Picture URL: " + picture);
                     System.out.println("Firebase Sign-in Provider (Fixed): google.com");
                     System.out.println("------------------------------");
 
                     return userRepository.findByEmail(email)
                             .flatMap(existingUser -> {
-                                // User already exists, update details and potentially create folder if not already linked
+                                // User already exists, update details
                                 existingUser.setFirebaseIdToken(idToken);
                                 existingUser.setImageUrl(picture);
                                 existingUser.setAuthProvider(User.AuthProvider.GOOGLE);
@@ -60,31 +66,55 @@ public class FirebaseAuthService {
                                 existingUser.setEmailVerified(emailVerified);
                                 existingUser.setLastLogin(LocalDateTime.now());
 
-                                if (name != null && !name.isEmpty() && !name.equals(existingUser.getUsername())) {
-                                    existingUser.setUsername(name);
+                                // --- START: REFINED USERNAME LOGIC (EXISTING USER) ---
+                                String newUsernameForExisting;
+                                // If name exists AND is not empty AND does NOT contain '@' (i.e., it's not an email itself)
+                                if (name != null && !name.isEmpty() && !name.contains("@")) {
+                                    newUsernameForExisting = name.toLowerCase().replaceAll("\\s+", "");
+                                    System.out.println("DEBUG: Name from Firebase ('" + name + "') is clean. Calculated newUsernameForExisting: " + newUsernameForExisting);
+                                } else {
+                                    // Otherwise (name is null/empty OR it's an email itself), use the email prefix.
+                                    newUsernameForExisting = email.split("@")[0].toLowerCase();
+                                    System.out.println("DEBUG: Name from Firebase ('" + name + "') is not clean. Calculated newUsernameForExisting (from email prefix): " + newUsernameForExisting);
                                 }
 
+                                System.out.println("DEBUG: Current existingUser.getUsername() (UserDetails) BEFORE update: " + existingUser.getUsername());
+                                System.out.println("DEBUG: Current existingUser.getUsernameField() (User model field) BEFORE update: " + existingUser.getUsernameField());
+
+                                // The comparison should be against the actual 'username' field, not the UserDetails 'getUsername()'
+                                if (!newUsernameForExisting.equals(existingUser.getUsernameField())) {
+                                    existingUser.setUsernameField(newUsernameForExisting);
+                                    System.out.println("DEBUG: existingUser.setUsernameField() called with: " + newUsernameForExisting);
+                                } else {
+                                    System.out.println("DEBUG: newUsernameForExisting is same as current usernameField, no update needed.");
+                                }
+
+                                System.out.println("DEBUG: existingUser.getUsername() (UserDetails) AFTER potential setUsernameField: " + existingUser.getUsername());
+                                System.out.println("DEBUG: existingUser.getUsernameField() (User model field) AFTER potential setUsernameField: " + existingUser.getUsernameField());
+                                // --- END: REFINED USERNAME LOGIC (EXISTING USER) ---
+
+                                // Generate the JWT using the 7-day expiration method
+                                String appJwtToken = jwtUtility.generateToken7Days(existingUser.getEmail());
+                                existingUser.setAccessToken(appJwtToken);
+
                                 Mono<User> userSaveMono;
-                                // Check if the user already has a Drive folder ID
                                 if (existingUser.getDriveFolderId() == null || existingUser.getDriveFolderId().isEmpty()) {
-                                    // User exists but no Drive folder linked, create one
                                     System.out.println("Existing user " + email + " found without Drive folder. Creating folder...");
                                     userSaveMono = driveService.createUserFolderIfNotExists(existingUser.getEmail())
                                             .flatMap(folderId -> {
                                                 existingUser.setDriveFolderId(folderId);
-                                                existingUser.setCurrentDriveUsageBytes(0L); // Initialize storage if not already
-                                                return userRepository.save(existingUser);
+                                                existingUser.setCurrentDriveUsageBytes(0L);
+                                                return userRepository.save(existingUser); // Save after drive folder set
                                             })
                                             .onErrorResume(driveEx -> {
                                                 System.err.println("CRITICAL: Failed to create Drive folder for existing Google user " + existingUser.getEmail() + ". Proceeding without folder link. Error: " + driveEx.getMessage());
-                                                return userRepository.save(existingUser);
+                                                return userRepository.save(existingUser); // Save even if drive folder creation fails
                                             });
                                 } else {
-                                    // User exists and already has a Drive folder linked, just save updated details
                                     System.out.println("Existing user " + email + " found with existing Drive folder. Updating details...");
-                                    userSaveMono = userRepository.save(existingUser);
+                                    userSaveMono = userRepository.save(existingUser); // This is where the update is saved
                                 }
-                                return userSaveMono;
+                                return userSaveMono; // Return the Mono<User> that results from saving
                             })
                             .switchIfEmpty(Mono.defer(() -> {
                                 // New user, create user record and then create Drive folder
@@ -97,23 +127,39 @@ public class FirebaseAuthService {
                                 newUser.setFirebaseIdToken(idToken);
                                 newUser.setAuthProvider(User.AuthProvider.GOOGLE);
                                 newUser.setSignInProvider("google.com");
-                                newUser.setCurrentDriveUsageBytes(0L); // Initialize drive usage for new users
+                                newUser.setCurrentDriveUsageBytes(0L);
 
-                                String finalUsername = (name != null && !name.isEmpty())
-                                        ? name.toLowerCase().replaceAll("\\s+", "")
-                                        : email.split("@")[0].toLowerCase();
-                                newUser.setUsername(finalUsername);
+                                // --- START: REFINED USERNAME LOGIC (NEW USER) ---
+                                String finalUsername;
+                                // If name exists AND is not empty AND does NOT contain '@' (i.e., it's not an email itself)
+                                if (name != null && !name.isEmpty() && !name.contains("@")) {
+                                    finalUsername = name.toLowerCase().replaceAll("\\s+", "");
+                                    System.out.println("DEBUG (NEW USER): Name from Firebase ('" + name + "') is clean. Calculated finalUsername: " + finalUsername);
+                                } else {
+                                    // Otherwise (name is null/empty OR it's an email itself), use the email prefix.
+                                    finalUsername = email.split("@")[0].toLowerCase();
+                                    System.out.println("DEBUG (NEW USER): Name from Firebase ('" + name + "') is not clean. Calculated finalUsername (from email prefix): " + finalUsername);
+                                }
+                                newUser.setUsernameField(finalUsername);
+                                System.out.println("DEBUG (NEW USER): newUser.getUsername() (UserDetails) after setUsernameField: " + newUser.getUsername());
+                                System.out.println("DEBUG (NEW USER): newUser.getUsernameField() (User model field) after setUsernameField: " + newUser.getUsernameField());
+                                // --- END: REFINED USERNAME LOGIC (NEW USER) ---
 
                                 LocalDateTime now = LocalDateTime.now();
                                 newUser.setCreatedAt(now);
                                 newUser.setLastLogin(now);
 
-                                return userRepository.save(newUser)
+                                // Generate the JWT for new user
+                                String appJwtToken = jwtUtility.generateToken7Days(newUser.getEmail());
+                                newUser.setAccessToken(appJwtToken);
+
+                                return userRepository.save(newUser) // Save the new user
                                         .flatMap(savedUser ->
-                                                driveService.createUserFolderIfNotExists(savedUser.getEmail()) // Create folder
+                                                driveService.createUserFolderIfNotExists(savedUser.getEmail())
                                                         .flatMap(folderId -> {
                                                             savedUser.setDriveFolderId(folderId);
-                                                            return userRepository.save(savedUser); // Save user with folder ID
+                                                            savedUser.setCurrentDriveUsageBytes(0L);
+                                                            return userRepository.save(savedUser); // Save again if drive folder added
                                                         })
                                                         .onErrorResume(driveEx -> {
                                                             System.err.println("CRITICAL: Failed to create Drive folder for new Google user " + savedUser.getEmail() + ". Deleting user from DB. Error: " + driveEx.getMessage());
@@ -122,17 +168,25 @@ public class FirebaseAuthService {
                                                         })
                                         );
                             }))
-                            .map(user -> {
-                                String appJwtToken = jwtUtility.generateToken(user.getEmail());
+                            .map(user -> { // This 'user' object is the result of the last flatMap (a saved User entity)
+                                String appJwtToken = user.getAccessToken();
+                                Date finalExpirationDate = jwtUtility.extractExpiration(appJwtToken);
+                                Instant finalExpirationInstant = (finalExpirationDate != null) ? finalExpirationDate.toInstant() : null;
+
+                                // --- Crucial Debugging Lines for final output ---
+                                System.out.println("DEBUG: Username in GoogleAuthResponse before sending to frontend (using getUsernameField()): " + user.getUsernameField());
+                                System.out.println("DEBUG: Email in GoogleAuthResponse before sending to frontend (using getEmail()): " + user.getEmail());
+                                // --- End Crucial Debugging Lines ---
 
                                 return new GoogleAuthResponse(
                                         appJwtToken,
+                                        finalExpirationInstant,
                                         user.getEmail(),
-                                        user.getUsername(),
+                                        user.getUsernameField(), // <<<--- **THIS IS THE KEY CHANGE!**
                                         user.getImageUrl(),
                                         user.getAuthProvider().name(),
-                                        user.getDriveFolderId(), // This should be before currentStorageUsageMb, // This is the issue
-                                        user.getCurrentDriveUsageBytes() / (1024.0 * 1024.0)
+                                        user.getDriveFolderId(),
+                                        bytesToMegabytes(user.getCurrentDriveUsageBytes())
                                 );
                             });
                 })
@@ -142,6 +196,7 @@ public class FirebaseAuthService {
                 })
                 .onErrorMap(Exception.class, e -> {
                     System.err.println("General Exception during authentication: " + e.getMessage());
+                    e.printStackTrace();
                     return new RuntimeException("Authentication failed: " + e.getMessage(), e);
                 });
     }

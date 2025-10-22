@@ -1,32 +1,32 @@
 package com.example.acespringbackend.model;
 
-// No Lombok imports needed anymore
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
+import org.springframework.data.mongodb.core.mapping.Field; // It's good practice to explicitly map field names if they might differ or for clarity
 
 import java.time.Instant;
-import java.util.Objects; // Used for Objects.hash and Objects.equals in hashCode and equals
+import java.util.Objects;
 
 @Document(collection = "jwtExpiredTokens")
 public class JwtExpiredToken {
 
     @Id
     private String id; // This can be the JWT token itself or a hash of it
+
+    // CHANGE THIS LINE: from ExpirationToken to token
+    @Field("token") // Explicitly map to "token" in MongoDB for clarity
     private String token; // Store the full token string
-    private Instant expirationTime; // When the token is set to expire
-    private boolean used; // To mark if the token has been used
-    private Instant issuedAt; // When the token was issued
 
-    // --- Constructors ---
+    private Instant expirationTime;
+    private boolean used;
+    private Instant issuedAt;
 
-    // No-argument constructor (replaces @NoArgsConstructor)
     public JwtExpiredToken() {
     }
 
-    // All-argument constructor (replaces @AllArgsConstructor)
     public JwtExpiredToken(String id, String token, Instant expirationTime, boolean used, Instant issuedAt) {
         this.id = id;
-        this.token = token;
+        this.token = token; // Update assignment here too
         this.expirationTime = expirationTime;
         this.used = used;
         this.issuedAt = issuedAt;
@@ -38,6 +38,7 @@ public class JwtExpiredToken {
         return id;
     }
 
+    // This getter is now directly for the 'token' field
     public String getToken() {
         return token;
     }
@@ -46,7 +47,7 @@ public class JwtExpiredToken {
         return expirationTime;
     }
 
-    public boolean isUsed() { // For boolean fields, Lombok typically generates `is` prefix
+    public boolean isUsed() {
         return used;
     }
 
@@ -60,6 +61,7 @@ public class JwtExpiredToken {
         this.id = id;
     }
 
+    // This setter is now directly for the 'token' field
     public void setToken(String token) {
         this.token = token;
     }
@@ -76,7 +78,7 @@ public class JwtExpiredToken {
         this.issuedAt = issuedAt;
     }
 
-    // --- toString, equals, hashCode (replaces @Data functionality) ---
+    // --- toString, equals, hashCode ---
 
     @Override
     public String toString() {
@@ -96,13 +98,13 @@ public class JwtExpiredToken {
         JwtExpiredToken that = (JwtExpiredToken) o;
         return used == that.used &&
                Objects.equals(id, that.id) &&
-               Objects.equals(token, that.token) &&
+               Objects.equals(token, that.token) && // Update here as well
                Objects.equals(expirationTime, that.expirationTime) &&
                Objects.equals(issuedAt, that.issuedAt);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(id, token, expirationTime, used, issuedAt);
+        return Objects.hash(id, token, expirationTime, used, issuedAt); // Update here as well
     }
 }
