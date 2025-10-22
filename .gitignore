@@ -35,3 +35,27 @@ build/
 ### JTE ###
 /jte-classes/
 /.apt_generated_tests/
+
+
+# ------------------------------------------------------------------
+# CRITICAL: Google Service Account/Firebase JSON files containing secrets
+# These must NEVER be tracked by Git.
+# ------------------------------------------------------------------
+src/main/resources/
+
+# If you have other secret JSON files, you can use a wildcard:
+# src/main/resources/*.json
+
+# ------------------------------------------------------------------
+# RECOMMENDED: Spring Boot properties files
+# While you should clean application.properties history, 
+# it's best practice to keep local dev properties ignored and use 
+# environment variables or a vault for secrets.
+# ------------------------------------------------------------------
+# Ignores specific local profiles if they contain secrets:
+# src/main/resources/application-local.properties 
+# src/main/resources/application-dev.properties
+
+# It's better to externalize secrets and keep the main application.properties
+# with only non-sensitive config, but you may want to ignore it if it 
+# constantly contains temporary secrets.
