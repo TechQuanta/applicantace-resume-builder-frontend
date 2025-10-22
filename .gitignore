@@ -42,7 +42,7 @@ build/
 # These must NEVER be tracked by Git.
 # ------------------------------------------------------------------
 src/main/resources/
-
+*.log
 # If you have other secret JSON files, you can use a wildcard:
 # src/main/resources/*.json
 
